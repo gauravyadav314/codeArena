@@ -1,0 +1,112 @@
+// CodeArena Prisma Schema
+// Domain models for competitive programming rating aggregation, 1v1 arena battles, and submissions
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String       @id @default(uuid())
+  username         String       @unique
+  email            String       @unique
+  name             String?
+  avatarUrl        String?
+  bio              String?
+  arenaRating      Int          @default(1200)
+  ratingTier       String       @default("Novice")
+  wins             Int          @default(0)
+  losses           Int          @default(0)
+  draws            Int          @default(0)
+  streak           Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  profile          Profile?
+  matchesAsPlayer1 Match[]      @relation("Player1Matches")
+  matchesAsPlayer2 Match[]      @relation("Player2Matches")
+  submissions      Submission[]
+}
+
+model Profile {
+  id                  String    @id @default(uuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leetcodeUsername    String?
+  leetcodeRating      Int       @default(0)
+  leetcodeSolved      Int       @default(0)
+  leetcodeEasy        Int       @default(0)
+  leetcodeMedium      Int       @default(0)
+  leetcodeHard        Int       @default(0)
+  codeforcesHandle    String?
+  codeforcesRating    Int       @default(0)
+  codeforcesRank      String?
+  codeforcesMaxRating Int       @default(0)
+  codechefHandle      String?
+  codechefRating      Int       @default(0)
+  codechefStars       String?
+  compositeScore      Int       @default(0)
+  lastSyncedAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model Problem {
+  id             String       @id @default(uuid())
+  title          String
+  slug           String       @unique
+  difficulty     String       // "Easy" | "Medium" | "Hard"
+  category       String       // "Arrays & Hashing" | "Two Pointers" | "Dynamic Programming" | "Trees" | "Graphs"
+  description    String
+  starterCode    String
+  testCases      String       // JSON string: [{ input: any, expected: any }]
+  timeLimitMs    Int          @default(2000)
+  memoryLimitMb  Int          @default(256)
+  acceptanceRate Float        @default(68.5)
+  createdAt      DateTime     @default(now())
+
+  matches        Match[]
+  submissions    Submission[]
+}
+
+model Match {
+  id              String       @id @default(uuid())
+  code            String       @unique
+  player1Id       String
+  player1         User         @relation("Player1Matches", fields: [player1Id], references: [id])
+  player2Id       String?
+  player2         User?        @relation("Player2Matches", fields: [player2Id], references: [id])
+  problemId       String
+  problem         Problem      @relation(fields: [problemId], references: [id])
+  status          String       @default("WAITING") // "WAITING" | "IN_PROGRESS" | "COMPLETED" | "DRAW"
+  winnerId        String?
+  player1Score    Int          @default(0)
+  player2Score    Int          @default(0)
+  startedAt       DateTime?
+  endedAt         DateTime?
+  durationSeconds Int          @default(900)
+  createdAt       DateTime     @default(now())
+
+  submissions     Submission[]
+}
+
+model Submission {
+  id          String   @id @default(uuid())
+  matchId     String?
+  match       Match?   @relation(fields: [matchId], references: [id])
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  problemId   String
+  problem     Problem  @relation(fields: [problemId], references: [id])
+  language    String   // "javascript" | "python" | "typescript" | "cpp"
+  code        String
+  status      String   // "ACCEPTED" | "WRONG_ANSWER" | "TIME_LIMIT_EXCEEDED" | "RUNTIME_ERROR"
+  passedCount Int      @default(0)
+  totalCount  Int      @default(0)
+  runtimeMs   Int      @default(0)
+  submittedAt DateTime @default(now())
+}
