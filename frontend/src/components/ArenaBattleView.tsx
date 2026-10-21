@@ -171,7 +171,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   // Quick Match: Find waiting match or create one
   const handleQuickMatch = async () => {
     if (!currentUser) return;
-    const waitingMatch = matches.find((m) => m.status === 'WAITING' && m.player1.username !== currentUser.username);
+    const waitingMatch = matches.find((m) => m.status === 'WAITING' && m.player1?.username !== currentUser.username);
     if (waitingMatch) {
       handleJoinMatch(waitingMatch.code);
     } else {
@@ -205,7 +205,16 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     try {
       const joinRes = await api.joinMatch(selectedMatch.code, opponent.username);
       if (joinRes.success) {
-        setSelectedMatch(joinRes.data);
+        setSelectedMatch((prev) => {
+          if (!prev) return joinRes.data;
+          return {
+            ...prev,
+            ...joinRes.data,
+            player1: joinRes.data.player1 || prev.player1,
+            player2: joinRes.data.player2 || prev.player2,
+            problem: joinRes.data.problem || prev.problem,
+          };
+        });
         setMatchEvents((prev) => [
           ...prev,
           `Opponent @${opponent.username} entered the arena! Duel commenced.`,
@@ -252,7 +261,16 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       if (res.success) {
         setVerdict(res.verdict);
         setSelectedTestCaseIndex(0);
-        setSelectedMatch(res.match);
+        setSelectedMatch((prev) => {
+          if (!prev) return res.match;
+          return {
+            ...prev,
+            ...res.match,
+            player1: res.match.player1 || prev.player1,
+            player2: res.match.player2 || prev.player2,
+            problem: res.match.problem || prev.problem,
+          };
+        });
 
         if (res.verdict.status === 'ACCEPTED') {
           setVictoryModalOpen(true);
@@ -377,7 +395,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                 const isWaiting = m.status === 'WAITING';
                 const isLive = m.status === 'IN_PROGRESS';
                 const isCompleted = m.status === 'COMPLETED';
-                const canJoin = isWaiting && currentUser && m.player1.username !== currentUser.username;
+                const canJoin = isWaiting && currentUser && m.player1?.username !== currentUser.username;
 
                 return (
                   <div key={m.id} className={`arena-room-card ${m.status.toLowerCase()}`}>
@@ -402,14 +420,14 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                     {/* Players Matchup */}
                     <div className="room-matchup">
                       <div className="matchup-player">
-                        {m.player1.avatarUrl ? (
+                        {m.player1?.avatarUrl ? (
                           <img src={m.player1.avatarUrl} alt={m.player1.username} className="player-avatar" />
                         ) : (
-                          <div className="player-avatar-fallback">{m.player1.username[0]}</div>
+                          <div className="player-avatar-fallback">{m.player1?.username?.[0] || 'H'}</div>
                         )}
                         <div className="player-meta">
-                          <span className="player-name">{m.player1.name || m.player1.username}</span>
-                          <span className="player-rating">{m.player1.arenaRating} ELO</span>
+                          <span className="player-name">{m.player1?.name || m.player1?.username || 'Host Player'}</span>
+                          <span className="player-rating">{m.player1?.arenaRating ?? 1200} ELO</span>
                         </div>
                       </div>
 
@@ -421,11 +439,11 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                             {m.player2.avatarUrl ? (
                               <img src={m.player2.avatarUrl} alt={m.player2.username} className="player-avatar" />
                             ) : (
-                              <div className="player-avatar-fallback">{m.player2.username[0]}</div>
+                              <div className="player-avatar-fallback">{m.player2.username?.[0] || 'O'}</div>
                             )}
                             <div className="player-meta">
                               <span className="player-name">{m.player2.name || m.player2.username}</span>
-                              <span className="player-rating">{m.player2.arenaRating} ELO</span>
+                              <span className="player-rating">{m.player2.arenaRating ?? 1200} ELO</span>
                             </div>
                           </>
                         ) : (
@@ -536,12 +554,21 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   // ==========================================
   // RENDER: ACTIVE DUEL ARENA VIEW
   // ==========================================
-  const isHost = currentUser?.username === selectedMatch.player1.username;
+  const hostPlayer = selectedMatch.player1 || {
+    id: selectedMatch.player1Id || 'p1',
+    username: 'Host',
+    name: 'Host Player',
+    arenaRating: 1200,
+    ratingTier: 'Novice',
+    avatarUrl: null,
+  };
+  const opponentPlayer = selectedMatch.player2;
+  const isHost = currentUser?.username === hostPlayer.username;
   const isMatchFinished = selectedMatch.status === 'COMPLETED';
   const winner = selectedMatch.winnerId
-    ? selectedMatch.winnerId === selectedMatch.player1.id
-      ? selectedMatch.player1
-      : selectedMatch.player2
+    ? selectedMatch.winnerId === hostPlayer.id
+      ? hostPlayer
+      : opponentPlayer
     : null;
 
   return (
@@ -555,10 +582,12 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
           </button>
           <div className="match-title-wrap">
             <span className="match-code-badge">{selectedMatch.code}</span>
-            <h2 className="match-problem-heading">{selectedMatch.problem.title}</h2>
-            <span className={`diff-pill ${selectedMatch.problem.difficulty.toLowerCase()}`}>
-              {selectedMatch.problem.difficulty}
-            </span>
+            <h2 className="match-problem-heading">{selectedMatch.problem?.title || 'Arena Problem'}</h2>
+            {selectedMatch.problem?.difficulty && (
+              <span className={`diff-pill ${selectedMatch.problem.difficulty.toLowerCase()}`}>
+                {selectedMatch.problem.difficulty}
+              </span>
+            )}
           </div>
         </div>
 
@@ -569,7 +598,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
         </div>
 
         <div className="live-nav-right">
-          {!selectedMatch.player2 && selectedMatch.status === 'WAITING' && (
+          {!opponentPlayer && selectedMatch.status === 'WAITING' && (
             <button
               className="btn-bot-challenge"
               onClick={handleSimulateBotOpponent}
@@ -589,21 +618,21 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       {/* Head-to-Head Duel Scoreboard */}
       <div className="duel-scoreboard">
         {/* Player 1 Card */}
-        <div className={`scoreboard-player-card ${winner?.id === selectedMatch.player1.id ? 'victor' : ''}`}>
-          {selectedMatch.player1.avatarUrl ? (
-            <img src={selectedMatch.player1.avatarUrl} alt={selectedMatch.player1.username} className="sb-avatar" />
+        <div className={`scoreboard-player-card ${winner?.id === hostPlayer.id ? 'victor' : ''}`}>
+          {hostPlayer.avatarUrl ? (
+            <img src={hostPlayer.avatarUrl} alt={hostPlayer.username} className="sb-avatar" />
           ) : (
-            <div className="sb-avatar-fallback">{selectedMatch.player1.username[0]}</div>
+            <div className="sb-avatar-fallback">{hostPlayer.username?.[0] || 'H'}</div>
           )}
           <div className="sb-info">
             <div className="sb-name-row">
-              <span className="sb-player-name">{selectedMatch.player1.name || selectedMatch.player1.username}</span>
+              <span className="sb-player-name">{hostPlayer.name || hostPlayer.username}</span>
               {isHost && <span className="sb-host-badge">YOU</span>}
             </div>
-            <span className="sb-tier-label">{selectedMatch.player1.ratingTier} • {selectedMatch.player1.arenaRating} ELO</span>
+            <span className="sb-tier-label">{hostPlayer.ratingTier || 'Novice'} • {hostPlayer.arenaRating ?? 1200} ELO</span>
           </div>
           <div className="sb-score-badge">
-            <span className="score-val">{selectedMatch.player1Score}</span>
+            <span className="score-val">{selectedMatch.player1Score ?? 0}</span>
             <span className="score-lbl">PTS</span>
           </div>
         </div>
@@ -617,26 +646,26 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
         </div>
 
         {/* Player 2 Card */}
-        <div className={`scoreboard-player-card opponent ${winner?.id === selectedMatch.player2?.id ? 'victor' : ''}`}>
-          {selectedMatch.player2 ? (
+        <div className={`scoreboard-player-card opponent ${winner?.id === opponentPlayer?.id ? 'victor' : ''}`}>
+          {opponentPlayer ? (
             <>
               <div className="sb-score-badge">
-                <span className="score-val">{selectedMatch.player2Score}</span>
+                <span className="score-val">{selectedMatch.player2Score ?? 0}</span>
                 <span className="score-lbl">PTS</span>
               </div>
               <div className="sb-info text-right">
                 <div className="sb-name-row justify-end">
-                  {!isHost && currentUser?.username === selectedMatch.player2.username && (
+                  {!isHost && currentUser?.username === opponentPlayer.username && (
                     <span className="sb-host-badge">YOU</span>
                   )}
-                  <span className="sb-player-name">{selectedMatch.player2.name || selectedMatch.player2.username}</span>
+                  <span className="sb-player-name">{opponentPlayer.name || opponentPlayer.username}</span>
                 </div>
-                <span className="sb-tier-label">{selectedMatch.player2.ratingTier} • {selectedMatch.player2.arenaRating} ELO</span>
+                <span className="sb-tier-label">{opponentPlayer.ratingTier || 'Novice'} • {opponentPlayer.arenaRating ?? 1200} ELO</span>
               </div>
-              {selectedMatch.player2.avatarUrl ? (
-                <img src={selectedMatch.player2.avatarUrl} alt={selectedMatch.player2.username} className="sb-avatar" />
+              {opponentPlayer.avatarUrl ? (
+                <img src={opponentPlayer.avatarUrl} alt={opponentPlayer.username} className="sb-avatar" />
               ) : (
-                <div className="sb-avatar-fallback">{selectedMatch.player2.username[0]}</div>
+                <div className="sb-avatar-fallback">{opponentPlayer.username?.[0] || 'O'}</div>
               )}
             </>
           ) : (

@@ -174,7 +174,11 @@ router.post('/:code/submit', async (req: Request, res: Response, next: NextFunct
 
     const match = await prisma.match.findUnique({
       where: { code },
-      include: { problem: true },
+      include: {
+        problem: true,
+        player1: true,
+        player2: true,
+      },
     });
 
     if (!match) {
@@ -230,7 +234,11 @@ router.post('/:code/submit', async (req: Request, res: Response, next: NextFunct
           endedAt: new Date(),
           ...(isPlayer1 ? { player1Score: scoreGain } : { player2Score: scoreGain }),
         },
-        include: { problem: true },
+        include: {
+          problem: true,
+          player1: true,
+          player2: true,
+        },
       });
 
       // Update user stats
