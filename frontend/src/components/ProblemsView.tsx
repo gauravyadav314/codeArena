@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { Problem, JudgeVerdict } from '../types';
 import { api } from '../services/api';
+import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
 
 interface ProblemsViewProps {
   onChallengeProblem?: (problemId: string) => void;
@@ -33,6 +34,8 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
   // Problem Studio (Solving mode)
   const [activeProblem, setActiveProblem] = useState<Problem | null>(null);
   const [code, setCode] = useState<string>('');
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('javascript');
+  const [codeByLanguage, setCodeByLanguage] = useState<Record<string, string>>({});
   const [running, setRunning] = useState<boolean>(false);
   const [verdict, setVerdict] = useState<JudgeVerdict | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
@@ -75,7 +78,9 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
       const full = await api.getProblem(problem.slug);
       if (full.success) {
         setActiveProblem(full.data);
-        setCode(full.data.starterCode);
+        const starter = getStarterCode(full.data.slug, selectedLanguage, full.data.starterCode);
+        setCode(starter);
+        setCodeByLanguage({ [selectedLanguage]: starter });
         setVerdict(null);
         setSelectedCaseIdx(0);
       }
@@ -84,11 +89,32 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
     }
   };
 
+  const handleLanguageChange = (newLang: string) => {
+    setCodeByLanguage((prev) => ({ ...prev, [selectedLanguage]: code }));
+    setSelectedLanguage(newLang);
+
+    if (codeByLanguage[newLang]) {
+      setCode(codeByLanguage[newLang]);
+    } else if (activeProblem) {
+      const newStarter = getStarterCode(activeProblem.slug, newLang, activeProblem.starterCode);
+      setCode(newStarter);
+      setCodeByLanguage((prev) => ({ ...prev, [newLang]: newStarter }));
+    }
+  };
+
+  const handleResetCode = () => {
+    if (activeProblem) {
+      const starter = getStarterCode(activeProblem.slug, selectedLanguage, activeProblem.starterCode);
+      setCode(starter);
+      setCodeByLanguage((prev) => ({ ...prev, [selectedLanguage]: starter }));
+    }
+  };
+
   const handleRunCode = async () => {
     if (!activeProblem) return;
     setRunning(true);
     try {
-      const res = await api.runProblemCode(activeProblem.slug, code);
+      const res = await api.runProblemCode(activeProblem.slug, code, selectedLanguage);
       if (res.success) {
         setVerdict(res.verdict);
         setSelectedCaseIdx(0);
@@ -158,7 +184,17 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
             <div className="editor-toolbar">
               <div className="toolbar-left">
                 <Code2 size={16} className="text-cyan" />
-                <span className="editor-lang-tag">JavaScript / ES2024</span>
+                <select
+                  className="language-selector"
+                  value={selectedLanguage}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
+                >
+                  {SUPPORTED_LANGUAGES.map((lang) => (
+                    <option key={lang.id} value={lang.id}>
+                      {lang.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="toolbar-right">
                 <button className="toolbar-btn" onClick={handleCopy}>
@@ -167,7 +203,7 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
                 </button>
                 <button
                   className="toolbar-btn"
-                  onClick={() => setCode(activeProblem.starterCode)}
+                  onClick={handleResetCode}
                 >
                   <RotateCcw size={14} />
                   <span>Reset Code</span>

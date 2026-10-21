@@ -71,10 +71,10 @@ export const api = {
     return request(`/api/problems/${encodeURIComponent(slug)}`);
   },
 
-  async runProblemCode(slug: string, code: string): Promise<{ success: boolean; verdict: JudgeVerdict }> {
+  async runProblemCode(slug: string, code: string, language: string = 'javascript'): Promise<{ success: boolean; verdict: JudgeVerdict }> {
     return request(`/api/problems/${encodeURIComponent(slug)}/run`, {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, language }),
     });
   },
 

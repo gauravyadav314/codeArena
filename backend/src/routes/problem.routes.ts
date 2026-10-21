@@ -82,7 +82,7 @@ router.get('/:slug', async (req: Request, res: Response, next: NextFunction) => 
 router.post('/:slug/run', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { slug } = req.params;
-    const { code } = req.body;
+    const { code, language = 'javascript' } = req.body;
 
     if (!code) {
       res.status(400).json({ success: false, message: 'Code content is required' });
@@ -105,7 +105,7 @@ router.post('/:slug/run', async (req: Request, res: Response, next: NextFunction
       parsedTestCases = [];
     }
 
-    const verdict = evaluateSubmission(code, parsedTestCases);
+    const verdict = await evaluateSubmission(code, parsedTestCases, undefined, language);
     res.status(200).json({ success: true, verdict });
   } catch (error) {
     next(error);

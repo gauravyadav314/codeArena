@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { Match, Problem, User, JudgeVerdict } from '../types';
 import { api } from '../services/api';
+import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
 
 interface ArenaBattleViewProps {
   currentUser: User | null;
@@ -46,6 +47,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   // In-match editor state
   const [code, setCode] = useState<string>('');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('javascript');
+  const [codeByLanguage, setCodeByLanguage] = useState<Record<string, string>>({});
   const [runningTests, setRunningTests] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [verdict, setVerdict] = useState<JudgeVerdict | null>(null);
@@ -89,7 +91,10 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       const res = await api.getMatch(matchCode);
       if (res.success) {
         setSelectedMatch(res.data);
-        setCode(res.data.problem.starterCode);
+        const initialLang = selectedLanguage || 'javascript';
+        const initialStarter = getStarterCode(res.data.problem.slug, initialLang, res.data.problem.starterCode);
+        setCode(initialStarter);
+        setCodeByLanguage({ [initialLang]: initialStarter });
         setVerdict(null);
         setSelectedTestCaseIndex(0);
         setTimeLeft(res.data.durationSeconds || 900);
@@ -108,6 +113,27 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       }
     } catch (err) {
       console.error('Failed to fetch match:', err);
+    }
+  };
+
+  const handleLanguageChange = (newLang: string) => {
+    setCodeByLanguage((prev) => ({ ...prev, [selectedLanguage]: code }));
+    setSelectedLanguage(newLang);
+
+    if (codeByLanguage[newLang]) {
+      setCode(codeByLanguage[newLang]);
+    } else if (selectedMatch) {
+      const newStarter = getStarterCode(selectedMatch.problem.slug, newLang, selectedMatch.problem.starterCode);
+      setCode(newStarter);
+      setCodeByLanguage((prev) => ({ ...prev, [newLang]: newStarter }));
+    }
+  };
+
+  const handleResetCode = () => {
+    if (selectedMatch) {
+      const starter = getStarterCode(selectedMatch.problem.slug, selectedLanguage, selectedMatch.problem.starterCode);
+      setCode(starter);
+      setCodeByLanguage((prev) => ({ ...prev, [selectedLanguage]: starter }));
     }
   };
 
@@ -723,11 +749,13 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                 <select
                   className="language-selector"
                   value={selectedLanguage}
-                  onChange={(e) => setSelectedLanguage(e.target.value)}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
                 >
-                  <option value="javascript">JavaScript (ES2024)</option>
-                  <option value="typescript">TypeScript</option>
-                  <option value="python">Python 3</option>
+                  {SUPPORTED_LANGUAGES.map((lang) => (
+                    <option key={lang.id} value={lang.id}>
+                      {lang.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -742,7 +770,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                 </button>
                 <button
                   className="toolbar-btn"
-                  onClick={() => setCode(selectedMatch.problem.starterCode)}
+                  onClick={handleResetCode}
                   title="Reset to starter code"
                 >
                   <RotateCcw size={14} />

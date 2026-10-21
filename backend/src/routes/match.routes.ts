@@ -203,7 +203,7 @@ router.post('/:code/submit', async (req: Request, res: Response, next: NextFunct
     }
 
     // Evaluate in safe VM
-    const verdict = evaluateSubmission(codeContent, parsedTestCases);
+    const verdict = await evaluateSubmission(codeContent, parsedTestCases, undefined, language);
 
     // Save submission record
     const submission = await prisma.submission.create({
