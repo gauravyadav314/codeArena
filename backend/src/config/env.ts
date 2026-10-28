@@ -11,8 +11,13 @@ export interface AppConfig {
   DATABASE_URL: string;
 }
 
+function parsePort(value: string | undefined, fallback: number): number {
+  const parsed = parseInt(value ?? '', 10);
+  return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+}
+
 export const env: AppConfig = {
-  PORT: parseInt(process.env.PORT || '5001', 10),
+  PORT: parsePort(process.env.PORT, 5001),
   NODE_ENV: process.env.NODE_ENV || 'development',
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   DATABASE_URL: process.env.DATABASE_URL || '',

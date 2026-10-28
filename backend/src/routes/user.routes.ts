@@ -135,4 +135,65 @@ router.post('/sync-profile', async (req: Request, res: Response, next: NextFunct
   }
 });
 
+// POST /api/users/register - Register a new user
+router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { username, email, name, avatarUrl, bio } = req.body;
+
+    if (!username || typeof username !== 'string' || username.trim().length < 3) {
+      res.status(400).json({ success: false, message: 'Username is required and must be at least 3 characters' });
+      return;
+    }
+
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      res.status(400).json({ success: false, message: 'A valid email address is required' });
+      return;
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Check for collision
+    const existing = await prisma.user.findFirst({
+      where: {
+        OR: [{ username: cleanUsername }, { email: cleanEmail }],
+      },
+    });
+
+    if (existing) {
+      const field = existing.username === cleanUsername ? 'Username' : 'Email';
+      res.status(409).json({ success: false, message: `${field} is already registered` });
+      return;
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        username: cleanUsername,
+        email: cleanEmail,
+        name: name ? String(name).trim() : cleanUsername,
+        avatarUrl: avatarUrl ? String(avatarUrl).trim() : null,
+        bio: bio ? String(bio).trim() : 'Competitive programmer on CodeArena',
+        arenaRating: 1200,
+        ratingTier: 'Novice',
+        profile: {
+          create: {
+            compositeScore: 1200,
+          },
+        },
+      },
+      include: {
+        profile: true,
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      data: user,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export const userRoutes = router;

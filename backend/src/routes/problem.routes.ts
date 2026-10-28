@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/prisma';
 import { evaluateSubmission, TestCase } from '../services/judge.service';
+import { rateLimiter } from '../middlewares/rateLimit';
 
 const router = Router();
 
@@ -79,7 +80,7 @@ router.get('/:slug', async (req: Request, res: Response, next: NextFunction) => 
 });
 
 // POST /api/problems/:slug/run - Run code against problem test cases
-router.post('/:slug/run', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:slug/run', rateLimiter(15), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { slug } = req.params;
     const { code, language = 'javascript' } = req.body;
@@ -107,6 +108,69 @@ router.post('/:slug/run', async (req: Request, res: Response, next: NextFunction
 
     const verdict = await evaluateSubmission(code, parsedTestCases, undefined, language);
     res.status(200).json({ success: true, verdict });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/problems/:slug/submit - Standalone practice submission
+router.post('/:slug/submit', rateLimiter(10), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { slug } = req.params;
+    const { code, username, language = 'javascript' } = req.body;
+
+    if (!code) {
+      res.status(400).json({ success: false, message: 'Code content is required' });
+      return;
+    }
+
+    if (!username) {
+      res.status(400).json({ success: false, message: 'username is required' });
+      return;
+    }
+
+    const [problem, user] = await Promise.all([
+      prisma.problem.findUnique({ where: { slug } }),
+      prisma.user.findUnique({ where: { username } }),
+    ]);
+
+    if (!problem) {
+      res.status(404).json({ success: false, message: `Problem '${slug}' not found` });
+      return;
+    }
+
+    if (!user) {
+      res.status(404).json({ success: false, message: `User '${username}' not found` });
+      return;
+    }
+
+    let parsedTestCases: TestCase[] = [];
+    try {
+      parsedTestCases = JSON.parse(problem.testCases);
+    } catch {
+      parsedTestCases = [];
+    }
+
+    const verdict = await evaluateSubmission(code, parsedTestCases, undefined, language);
+
+    const submission = await prisma.submission.create({
+      data: {
+        userId: user.id,
+        problemId: problem.id,
+        language,
+        code,
+        status: verdict.status,
+        passedCount: verdict.passedCount,
+        totalCount: verdict.totalCount,
+        runtimeMs: verdict.runtimeMs,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      verdict,
+      submission,
+    });
   } catch (error) {
     next(error);
   }
