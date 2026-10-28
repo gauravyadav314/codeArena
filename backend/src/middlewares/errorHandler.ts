@@ -1,26 +1,52 @@
 import { Request, Response, NextFunction } from 'express';
+import { AppError } from '../errors/AppError';
+import { logger } from '../config/logger';
 import { env } from '../config/env';
 
-export interface AppError extends Error {
-  status?: number;
-  statusCode?: number;
-}
-
 export const errorHandler = (
-  err: AppError,
+  err: Error | AppError,
   req: Request,
   res: Response,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  next: NextFunction
+  _next: NextFunction
 ): void => {
-  const statusCode = err.status || err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
+  const isAppError = err instanceof AppError;
+  const statusCode = isAppError ? err.statusCode : 500;
+  const code = isAppError ? err.code : 'INTERNAL_SERVER_ERROR';
+  const message = err.message || 'An unexpected internal error occurred';
+  const details = isAppError ? err.details : undefined;
+
+  // Log error with appropriate severity
+  if (statusCode >= 500) {
+    logger.error(
+      {
+        err,
+        method: req.method,
+        url: req.originalUrl,
+        statusCode,
+      },
+      `[Unhandled Error] ${message}`
+    );
+  } else {
+    logger.warn(
+      {
+        code,
+        method: req.method,
+        url: req.originalUrl,
+        statusCode,
+        details,
+      },
+      `[Client Error] ${message}`
+    );
+  }
 
   res.status(statusCode).json({
+    success: false,
+    message, // Backwards-compatible field
     error: {
-      status: statusCode,
+      code,
       message,
-      ...(env.NODE_ENV !== 'production' ? { stack: err.stack } : {}),
+      ...(details ? { details } : {}),
+      ...(env.NODE_ENV === 'development' && statusCode >= 500 ? { stack: err.stack } : {}),
     },
   });
 };

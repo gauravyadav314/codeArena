@@ -1,42 +1,44 @@
 // CodeArena Prisma Schema
-// Domain models for competitive programming rating aggregation, 1v1 arena battles, and submissions
+// Dual-mode compatible: SQLite for local zero-config development & testing,
+// with schema.postgresql.prisma providing native enums for production PostgreSQL.
 
 generator client {
   provider = "prisma-client-js"
 }
 
-// PostgreSQL datasource definition (for production):
-// datasource db {
-//   provider = "postgresql"
-//   url      = env("DATABASE_URL")
-// }
-
-// Local development datasource (SQLite zero-config):
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id               String       @id @default(uuid())
-  username         String       @unique
-  email            String       @unique
+  id               String          @id @default(uuid())
+  username         String          @unique
+  email            String          @unique
+  passwordHash     String?
+  refreshTokenHash String?
+  role             String          @default("USER") // "USER" | "ADMIN"
   name             String?
   avatarUrl        String?
   bio              String?
-  arenaRating      Int          @default(1200)
-  ratingTier       String       @default("Novice")
-  wins             Int          @default(0)
-  losses           Int          @default(0)
-  draws            Int          @default(0)
-  streak           Int          @default(0)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  arenaRating      Int             @default(1200)
+  ratingTier       String          @default("Novice")
+  wins             Int             @default(0)
+  losses           Int             @default(0)
+  draws            Int             @default(0)
+  streak           Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   profile          Profile?
-  matchesAsPlayer1 Match[]      @relation("Player1Matches")
-  matchesAsPlayer2 Match[]      @relation("Player2Matches")
+  matchesAsPlayer1 Match[]         @relation("Player1Matches")
+  matchesAsPlayer2 Match[]         @relation("Player2Matches")
+  wonMatches       Match[]         @relation("WonMatches")
   submissions      Submission[]
+  ratingHistories  RatingHistory[]
+
+  @@index([arenaRating])
+  @@index([username])
 }
 
 model Profile {
@@ -78,27 +80,56 @@ model Problem {
 
   matches        Match[]
   submissions    Submission[]
+  testCaseItems  TestCase[]
+
+  @@index([slug])
+  @@index([difficulty])
+  @@index([category])
+}
+
+model TestCase {
+  id          String   @id @default(uuid())
+  problemId   String
+  problem     Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  input       String
+  expected    String
+  isHidden    Boolean  @default(false)
+  order       Int      @default(0)
+  explanation String?
+  createdAt   DateTime @default(now())
+
+  @@index([problemId, isHidden])
 }
 
 model Match {
-  id              String       @id @default(uuid())
-  code            String       @unique
-  player1Id       String
-  player1         User         @relation("Player1Matches", fields: [player1Id], references: [id])
-  player2Id       String?
-  player2         User?        @relation("Player2Matches", fields: [player2Id], references: [id])
-  problemId       String
-  problem         Problem      @relation(fields: [problemId], references: [id])
-  status          String       @default("WAITING") // "WAITING" | "IN_PROGRESS" | "COMPLETED" | "DRAW"
-  winnerId        String?
-  player1Score    Int          @default(0)
-  player2Score    Int          @default(0)
-  startedAt       DateTime?
-  endedAt         DateTime?
-  durationSeconds Int          @default(900)
-  createdAt       DateTime     @default(now())
+  id                  String          @id @default(uuid())
+  code                String          @unique
+  player1Id           String
+  player1             User            @relation("Player1Matches", fields: [player1Id], references: [id])
+  player2Id           String?
+  player2             User?           @relation("Player2Matches", fields: [player2Id], references: [id])
+  problemId           String
+  problem             Problem         @relation(fields: [problemId], references: [id])
+  status              String          @default("WAITING") // "WAITING" | "IN_PROGRESS" | "COMPLETED" | "DRAW" | "CANCELLED"
+  winnerId            String?
+  winner              User?           @relation("WonMatches", fields: [winnerId], references: [id])
+  player1Score        Int             @default(0)
+  player2Score        Int             @default(0)
+  player1RatingBefore Int?
+  player1RatingAfter  Int?
+  player2RatingBefore Int?
+  player2RatingAfter  Int?
+  startedAt           DateTime?
+  endedAt             DateTime?
+  durationSeconds     Int             @default(900)
+  createdAt           DateTime        @default(now())
 
-  submissions     Submission[]
+  submissions         Submission[]
+  ratingHistories     RatingHistory[]
+
+  @@index([status])
+  @@index([player1Id])
+  @@index([player2Id])
 }
 
 model Submission {
@@ -109,11 +140,30 @@ model Submission {
   user        User     @relation(fields: [userId], references: [id])
   problemId   String
   problem     Problem  @relation(fields: [problemId], references: [id])
-  language    String   // "javascript" | "python" | "typescript" | "cpp"
+  language    String   // "javascript" | "python" | "typescript" | "cpp" | "java"
   code        String
-  status      String   // "ACCEPTED" | "WRONG_ANSWER" | "TIME_LIMIT_EXCEEDED" | "RUNTIME_ERROR"
+  status      String   // "ACCEPTED" | "WRONG_ANSWER" | "TIME_LIMIT_EXCEEDED" | "RUNTIME_ERROR" | "COMPILATION_ERROR"
   passedCount Int      @default(0)
   totalCount  Int      @default(0)
   runtimeMs   Int      @default(0)
   submittedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([problemId])
+  @@index([matchId])
+}
+
+model RatingHistory {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matchId      String?
+  match        Match?   @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  ratingBefore Int
+  ratingAfter  Int
+  change       Int
+  reason       String   @default("MATCH_RESULT") // "MATCH_WIN" | "MATCH_LOSS" | "MATCH_DRAW" | "PROFILE_SYNC"
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
 }

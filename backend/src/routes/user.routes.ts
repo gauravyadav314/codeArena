@@ -1,6 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/prisma';
 import { calculateCompositeScore, getRatingTier } from '../services/rating.service';
+import { validateRequest } from '../middlewares/validate';
+import { syncProfileSchema, usernameParamSchema } from '../validators/user.validator';
+import { registerSchema } from '../validators/auth.validator';
+import { register } from '../services/auth.service';
+import { syncAllPlatformStats } from '../services/externalProfile.service';
+import { NotFoundError } from '../errors/AppError';
+import { optionalAuth, requireOwnership } from '../middlewares/auth';
 
 const router = Router();
 
@@ -23,177 +30,183 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 });
 
 // GET /api/users/:username - User profile details with multi-platform stats
-router.get('/:username', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { username } = req.params;
-    const user = await prisma.user.findUnique({
-      where: { username },
-      include: {
-        profile: true,
-        submissions: {
-          include: {
-            problem: true,
+router.get(
+  '/:username',
+  validateRequest({ params: usernameParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { username } = req.params;
+      const user = await prisma.user.findUnique({
+        where: { username },
+        include: {
+          profile: true,
+          submissions: {
+            include: {
+              problem: true,
+            },
+            orderBy: { submittedAt: 'desc' },
+            take: 10,
           },
-          orderBy: { submittedAt: 'desc' },
-          take: 10,
+          ratingHistories: {
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+          },
         },
-      },
-    });
+      });
 
-    if (!user) {
-      res.status(404).json({ success: false, message: `User '${username}' not found` });
-      return;
+      if (!user) {
+        throw new NotFoundError(`User '${username}' not found`);
+      }
+
+      const { passwordHash: _, refreshTokenHash: __, ...safeUser } = user;
+      res.status(200).json({ success: true, data: safeUser });
+    } catch (error) {
+      next(error);
     }
-
-    res.status(200).json({ success: true, data: user });
-  } catch (error) {
-    next(error);
   }
-});
+);
 
 // POST /api/users/sync-profile - Update platform handles and recompute composite rating
-router.post('/sync-profile', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const {
-      username,
-      leetcodeUsername,
-      codeforcesHandle,
-      codechefHandle,
-      leetcodeRating,
-      leetcodeSolved,
-      codeforcesRating,
-      codechefRating,
-    } = req.body;
+router.post(
+  '/sync-profile',
+  optionalAuth,
+  validateRequest({ body: syncProfileSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const {
+        username,
+        leetcodeUsername,
+        codeforcesHandle,
+        codechefHandle,
+        leetcodeRating,
+        leetcodeSolved,
+        codeforcesRating,
+        codechefRating,
+      } = req.body;
 
-    if (!username) {
-      res.status(400).json({ success: false, message: 'username is required' });
-      return;
-    }
+      const user = await prisma.user.findUnique({
+        where: { username },
+        include: { profile: true },
+      });
 
-    const user = await prisma.user.findUnique({
-      where: { username },
-      include: { profile: true },
-    });
+      if (!user) {
+        throw new NotFoundError(`User '${username}' not found`);
+      }
 
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found' });
-      return;
-    }
+      // Automatically fetch latest stats from external platforms with caching & retries
+      const effectiveLcHandle = leetcodeUsername ?? user.profile?.leetcodeUsername;
+      const effectiveCfHandle = codeforcesHandle ?? user.profile?.codeforcesHandle;
+      const effectiveCcHandle = codechefHandle ?? user.profile?.codechefHandle;
 
-    const lcRating = leetcodeRating ?? user.profile?.leetcodeRating ?? 1800;
-    const cfRating = codeforcesRating ?? user.profile?.codeforcesRating ?? 1600;
-    const ccRating = codechefRating ?? user.profile?.codechefRating ?? 1700;
+      const externalStats = await syncAllPlatformStats({
+        leetcodeUsername: effectiveLcHandle,
+        codeforcesHandle: effectiveCfHandle,
+        codechefHandle: effectiveCcHandle,
+      });
 
-    const composite = calculateCompositeScore(lcRating, cfRating, ccRating);
-    const tier = getRatingTier(composite);
+      const lcRating = leetcodeRating ?? externalStats.leetcodeRating ?? user.profile?.leetcodeRating ?? 1800;
+      const lcSolved = leetcodeSolved ?? externalStats.leetcodeSolved ?? user.profile?.leetcodeSolved ?? 250;
+      const cfRating = codeforcesRating ?? externalStats.codeforcesRating ?? user.profile?.codeforcesRating ?? 1600;
+      const cfMaxRating = externalStats.codeforcesMaxRating ?? user.profile?.codeforcesMaxRating ?? cfRating;
+      const cfRank = externalStats.codeforcesRank ?? user.profile?.codeforcesRank ?? 'Expert';
+      const ccRating = codechefRating ?? externalStats.codechefRating ?? user.profile?.codechefRating ?? 1700;
+      const ccStars = externalStats.codechefStars ?? user.profile?.codechefStars ?? '3★';
 
-    // Update user and profile in a transaction
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        arenaRating: composite,
-        ratingTier: tier,
-        profile: {
-          upsert: {
-            create: {
-              leetcodeUsername: leetcodeUsername ?? user.profile?.leetcodeUsername,
-              leetcodeRating: lcRating,
-              leetcodeSolved: leetcodeSolved ?? user.profile?.leetcodeSolved ?? 250,
-              codeforcesHandle: codeforcesHandle ?? user.profile?.codeforcesHandle,
-              codeforcesRating: cfRating,
-              codechefHandle: codechefHandle ?? user.profile?.codechefHandle,
-              codechefRating: ccRating,
-              compositeScore: composite,
-              lastSyncedAt: new Date(),
-            },
-            update: {
-              leetcodeUsername: leetcodeUsername ?? user.profile?.leetcodeUsername,
-              leetcodeRating: lcRating,
-              leetcodeSolved: leetcodeSolved ?? user.profile?.leetcodeSolved,
-              codeforcesHandle: codeforcesHandle ?? user.profile?.codeforcesHandle,
-              codeforcesRating: cfRating,
-              codechefHandle: codechefHandle ?? user.profile?.codechefHandle,
-              codechefRating: ccRating,
-              compositeScore: composite,
-              lastSyncedAt: new Date(),
+      const composite = calculateCompositeScore(lcRating, cfRating, ccRating);
+      const tier = getRatingTier(composite);
+
+      // Record rating history if composite changed
+      const oldRating = user.arenaRating;
+      const ratingDelta = composite - oldRating;
+
+      const updatedUser = await prisma.$transaction(async (tx) => {
+        const u = await tx.user.update({
+          where: { id: user.id },
+          data: {
+            arenaRating: composite,
+            ratingTier: tier,
+            profile: {
+              upsert: {
+                create: {
+                  leetcodeUsername: effectiveLcHandle,
+                  leetcodeRating: lcRating,
+                  leetcodeSolved: lcSolved,
+                  codeforcesHandle: effectiveCfHandle,
+                  codeforcesRating: cfRating,
+                  codeforcesMaxRating: cfMaxRating,
+                  codeforcesRank: cfRank,
+                  codechefHandle: effectiveCcHandle,
+                  codechefRating: ccRating,
+                  codechefStars: ccStars,
+                  compositeScore: composite,
+                  lastSyncedAt: new Date(),
+                },
+                update: {
+                  leetcodeUsername: effectiveLcHandle,
+                  leetcodeRating: lcRating,
+                  leetcodeSolved: lcSolved,
+                  codeforcesHandle: effectiveCfHandle,
+                  codeforcesRating: cfRating,
+                  codeforcesMaxRating: cfMaxRating,
+                  codeforcesRank: cfRank,
+                  codechefHandle: effectiveCcHandle,
+                  codechefRating: ccRating,
+                  codechefStars: ccStars,
+                  compositeScore: composite,
+                  lastSyncedAt: new Date(),
+                },
+              },
             },
           },
-        },
-      },
-      include: {
-        profile: true,
-      },
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Profile and composite ratings synchronized successfully',
-      data: updatedUser,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/users/register - Register a new user
-router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { username, email, name, avatarUrl, bio } = req.body;
-
-    if (!username || typeof username !== 'string' || username.trim().length < 3) {
-      res.status(400).json({ success: false, message: 'Username is required and must be at least 3 characters' });
-      return;
-    }
-
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      res.status(400).json({ success: false, message: 'A valid email address is required' });
-      return;
-    }
-
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanEmail = email.trim().toLowerCase();
-
-    // Check for collision
-    const existing = await prisma.user.findFirst({
-      where: {
-        OR: [{ username: cleanUsername }, { email: cleanEmail }],
-      },
-    });
-
-    if (existing) {
-      const field = existing.username === cleanUsername ? 'Username' : 'Email';
-      res.status(409).json({ success: false, message: `${field} is already registered` });
-      return;
-    }
-
-    const user = await prisma.user.create({
-      data: {
-        username: cleanUsername,
-        email: cleanEmail,
-        name: name ? String(name).trim() : cleanUsername,
-        avatarUrl: avatarUrl ? String(avatarUrl).trim() : null,
-        bio: bio ? String(bio).trim() : 'Competitive programmer on CodeArena',
-        arenaRating: 1200,
-        ratingTier: 'Novice',
-        profile: {
-          create: {
-            compositeScore: 1200,
+          include: {
+            profile: true,
           },
-        },
-      },
-      include: {
-        profile: true,
-      },
-    });
+        });
 
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      data: user,
-    });
-  } catch (error) {
-    next(error);
+        if (ratingDelta !== 0) {
+          await tx.ratingHistory.create({
+            data: {
+              userId: user.id,
+              ratingBefore: oldRating,
+              ratingAfter: composite,
+              change: ratingDelta,
+              reason: 'PROFILE_SYNC',
+            },
+          });
+        }
+
+        return u;
+      });
+
+      const { passwordHash: _, refreshTokenHash: __, ...safeUser } = updatedUser;
+
+      res.status(200).json({
+        success: true,
+        message: 'Profile and composite ratings synchronized successfully',
+        data: safeUser,
+      });
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
+
+// POST /api/users/register - Register a new user (delegates to auth.service)
+router.post(
+  '/register',
+  validateRequest({ body: registerSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { user } = await register(req.body);
+      res.status(201).json({
+        success: true,
+        message: 'User registered successfully',
+        data: user,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 export const userRoutes = router;

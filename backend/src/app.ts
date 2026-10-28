@@ -1,6 +1,10 @@
 import express, { Application } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import pinoHttp from 'pino-http';
 import { env } from './config/env';
+import { logger } from './config/logger';
 import { apiRouter } from './routes';
 import { healthRoutes } from './routes/health.routes';
 import { notFoundHandler } from './middlewares/notFoundHandler';
@@ -9,15 +13,40 @@ import { errorHandler } from './middlewares/errorHandler';
 export const createApp = (): Application => {
   const app = express();
 
-  // Basic security and parsing middleware
+  // Helmet HTTP security headers
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginEmbedderPolicy: false,
+    })
+  );
+
+  // Structured request logging with Pino
+  if (env.NODE_ENV !== 'test') {
+    app.use(
+      pinoHttp({
+        logger,
+        autoLogging: {
+          ignore: (req) => req.url === '/health' || req.url === '/api/health',
+        },
+      })
+    );
+  }
+
+  // CORS Configuration
   app.use(
     cors({
       origin: env.CLIENT_ORIGIN,
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     })
   );
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+
+  // Cookie and body parsers
+  app.use(cookieParser());
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   // Root health check & API router
   app.use('/health', healthRoutes);

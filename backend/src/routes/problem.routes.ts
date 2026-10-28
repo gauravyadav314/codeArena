@@ -2,30 +2,38 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/prisma';
 import { evaluateSubmission, TestCase } from '../services/judge.service';
 import { rateLimiter } from '../middlewares/rateLimit';
+import { validateRequest } from '../middlewares/validate';
+import {
+  problemSlugParamSchema,
+  runProblemCodeSchema,
+  submitProblemCodeSchema,
+} from '../validators/problem.validator';
+import { optionalAuth } from '../middlewares/auth';
+import { NotFoundError } from '../errors/AppError';
 
 const router = Router();
 
-// GET /api/problems - List all problems
-router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+// Helper: Filter out hidden test cases to prevent problem answer leaks
+function sanitizeProblemForPublic(problem: any) {
+  let publicCases: any[] = [];
   try {
-    const { difficulty, category, search } = req.query;
+    const parsed = JSON.parse(problem.testCases);
+    // Only return the first 2 sample cases publicly; remaining cases are hidden judge cases
+    publicCases = Array.isArray(parsed) ? parsed.slice(0, 2) : [];
+  } catch {
+    publicCases = [];
+  }
 
-    const whereClause: any = {};
-    if (difficulty && typeof difficulty === 'string' && difficulty !== 'All') {
-      whereClause.difficulty = difficulty;
-    }
-    if (category && typeof category === 'string' && category !== 'All') {
-      whereClause.category = category;
-    }
-    if (search && typeof search === 'string') {
-      whereClause.OR = [
-        { title: { contains: search } },
-        { description: { contains: search } },
-      ];
-    }
+  return {
+    ...problem,
+    testCases: JSON.stringify(publicCases),
+  };
+}
 
+// GET /api/problems - List all problems
+router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
     const problems = await prisma.problem.findMany({
-      where: whereClause,
       select: {
         id: true,
         title: true,
@@ -36,11 +44,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         timeLimitMs: true,
         memoryLimitMb: true,
         createdAt: true,
-        _count: {
-          select: { submissions: true },
-        },
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { title: 'asc' },
     });
 
     res.status(200).json({ success: true, count: problems.length, data: problems });
@@ -49,132 +54,117 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// GET /api/problems/:slug - Detailed problem with starter code & test cases
-router.get('/:slug', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { slug } = req.params;
-    const problem = await prisma.problem.findUnique({
-      where: { slug },
-      include: {
-        submissions: {
-          take: 5,
-          orderBy: { submittedAt: 'desc' },
-          include: {
-            user: {
-              select: { username: true, arenaRating: true, avatarUrl: true },
-            },
+// GET /api/problems/:slug - Get single problem details (sanitizes hidden test cases)
+router.get(
+  '/:slug',
+  validateRequest({ params: problemSlugParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { slug } = req.params;
+      const problem = await prisma.problem.findUnique({
+        where: { slug },
+      });
+
+      if (!problem) {
+        throw new NotFoundError(`Problem '${slug}' not found`);
+      }
+
+      res.status(200).json({ success: true, data: sanitizeProblemForPublic(problem) });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /api/problems/:slug/run - Run code against sample test cases (Dry Run)
+router.post(
+  '/:slug/run',
+  rateLimiter,
+  validateRequest({ params: problemSlugParamSchema, body: runProblemCodeSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { slug } = req.params;
+      const { code, language, testCases } = req.body;
+
+      const problem = await prisma.problem.findUnique({ where: { slug } });
+      if (!problem) throw new NotFoundError(`Problem '${slug}' not found`);
+
+      let parsedCases: TestCase[] = [];
+      if (testCases && Array.isArray(testCases) && testCases.length > 0) {
+        parsedCases = testCases;
+      } else {
+        try {
+          const allCases = JSON.parse(problem.testCases);
+          parsedCases = allCases.slice(0, 2); // Dry run runs on sample test cases
+        } catch {
+          parsedCases = [];
+        }
+      }
+
+      const verdict = await evaluateSubmission(code, parsedCases, undefined, language);
+      res.status(200).json({ success: true, data: verdict });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /api/problems/:slug/submit - Practice / Solo submission against full test suite
+router.post(
+  '/:slug/submit',
+  rateLimiter,
+  optionalAuth,
+  validateRequest({ params: problemSlugParamSchema, body: submitProblemCodeSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { slug } = req.params;
+      const { code, language, username } = req.body;
+      const effectiveUsername = req.user?.username || username || 'anonymous';
+
+      const problem = await prisma.problem.findUnique({ where: { slug } });
+      if (!problem) throw new NotFoundError(`Problem '${slug}' not found`);
+
+      let fullTestCases: TestCase[] = [];
+      try {
+        fullTestCases = JSON.parse(problem.testCases);
+      } catch {
+        fullTestCases = [];
+      }
+
+      // Evaluate against all test cases including hidden ones
+      const verdict = await evaluateSubmission(code, fullTestCases, undefined, language);
+
+      // Record submission if user exists
+      const user = await prisma.user.findUnique({ where: { username: effectiveUsername } });
+      let submissionRecord = null;
+
+      if (user) {
+        submissionRecord = await prisma.submission.create({
+          data: {
+            problemId: problem.id,
+            userId: user.id,
+            language,
+            code,
+            status: verdict.status,
+            passedCount: verdict.passedCount,
+            totalCount: verdict.totalCount,
+            runtimeMs: verdict.runtimeMs,
           },
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: verdict.status === 'ACCEPTED' ? 'Solution Accepted!' : 'Submission did not pass all test cases',
+        data: {
+          verdict,
+          submission: submissionRecord,
         },
-      },
-    });
-
-    if (!problem) {
-      res.status(404).json({ success: false, message: `Problem '${slug}' not found` });
-      return;
+      });
+    } catch (error) {
+      next(error);
     }
-
-    res.status(200).json({ success: true, data: problem });
-  } catch (error) {
-    next(error);
   }
-});
-
-// POST /api/problems/:slug/run - Run code against problem test cases
-router.post('/:slug/run', rateLimiter(15), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { slug } = req.params;
-    const { code, language = 'javascript' } = req.body;
-
-    if (!code) {
-      res.status(400).json({ success: false, message: 'Code content is required' });
-      return;
-    }
-
-    const problem = await prisma.problem.findUnique({
-      where: { slug },
-    });
-
-    if (!problem) {
-      res.status(404).json({ success: false, message: `Problem '${slug}' not found` });
-      return;
-    }
-
-    let parsedTestCases: TestCase[] = [];
-    try {
-      parsedTestCases = JSON.parse(problem.testCases);
-    } catch {
-      parsedTestCases = [];
-    }
-
-    const verdict = await evaluateSubmission(code, parsedTestCases, undefined, language);
-    res.status(200).json({ success: true, verdict });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/problems/:slug/submit - Standalone practice submission
-router.post('/:slug/submit', rateLimiter(10), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { slug } = req.params;
-    const { code, username, language = 'javascript' } = req.body;
-
-    if (!code) {
-      res.status(400).json({ success: false, message: 'Code content is required' });
-      return;
-    }
-
-    if (!username) {
-      res.status(400).json({ success: false, message: 'username is required' });
-      return;
-    }
-
-    const [problem, user] = await Promise.all([
-      prisma.problem.findUnique({ where: { slug } }),
-      prisma.user.findUnique({ where: { username } }),
-    ]);
-
-    if (!problem) {
-      res.status(404).json({ success: false, message: `Problem '${slug}' not found` });
-      return;
-    }
-
-    if (!user) {
-      res.status(404).json({ success: false, message: `User '${username}' not found` });
-      return;
-    }
-
-    let parsedTestCases: TestCase[] = [];
-    try {
-      parsedTestCases = JSON.parse(problem.testCases);
-    } catch {
-      parsedTestCases = [];
-    }
-
-    const verdict = await evaluateSubmission(code, parsedTestCases, undefined, language);
-
-    const submission = await prisma.submission.create({
-      data: {
-        userId: user.id,
-        problemId: problem.id,
-        language,
-        code,
-        status: verdict.status,
-        passedCount: verdict.passedCount,
-        totalCount: verdict.totalCount,
-        runtimeMs: verdict.runtimeMs,
-      },
-    });
-
-    res.status(200).json({
-      success: true,
-      verdict,
-      submission,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
+);
 
 export const problemRoutes = router;
-

@@ -140,3 +140,4 @@ export function playTickSound() {
   osc.start(now);
   osc.stop(now + 0.04);
 }
+

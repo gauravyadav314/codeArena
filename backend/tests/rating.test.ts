@@ -51,3 +51,4 @@ test('Rating Service - getRatingTier', async (t) => {
     assert.equal(getRatingTier(800), 'Novice');
   });
 });
+

@@ -1,24 +1,40 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { prisma } from '../config/prisma';
-import { evaluateSubmission, TestCase } from '../services/judge.service';
-import { getRatingTier } from '../services/rating.service';
 import { rateLimiter } from '../middlewares/rateLimit';
+import { validateRequest } from '../middlewares/validate';
+import {
+  createMatchSchema,
+  drawMatchSchema,
+  joinMatchSchema,
+  matchCodeParamSchema,
+  matchMessageSchema,
+  submitMatchCodeSchema,
+} from '../validators/match.validator';
+import { optionalAuth, requireAuth } from '../middlewares/auth';
+import { BadRequestError, ForbiddenError, NotFoundError } from '../errors/AppError';
+import { finalizeMatchResult } from '../services/elo.service';
+import { enqueueJudgeJob, getJudgeJobStatus } from '../services/judgeQueue.service';
+import { startServerMatchTimer, clearMatchTimer, getSocketServer } from '../socket';
+import {
+  joinQueue,
+  leaveQueue,
+  getQueueStatus,
+} from '../services/matchmaking.service';
+import { TestCase } from '../services/judge.service';
 
 const router = Router();
 
-// ---------------------------------------------------------------------------
-// Helper: Compute ELO delta for a match result
-// K = 32, expectedScore from winner's perspective
-// ---------------------------------------------------------------------------
-function computeElo(winnerRating: number, loserRating: number): { gain: number; loss: number } {
-  const K = 32;
-  const expectedScore = 1 / (1 + Math.pow(10, (loserRating - winnerRating) / 400));
-  const gain = Math.round(K * (1 - expectedScore));
-  const loss = Math.round(K * expectedScore);
-  return { gain, loss };
+// In-memory chat storage for active match rooms
+interface MatchMessage {
+  id: string;
+  senderUsername: string;
+  text: string;
+  createdAt: string;
 }
+const matchMessagesStore = new Map<string, MatchMessage[]>();
 
-// GET /api/matches - List all matches
+// GET /api/matches - List recent matches
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { status } = req.query;
@@ -53,391 +69,391 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// GET /api/matches/:code - Get single match details
-router.get('/:code', async (req: Request, res: Response, next: NextFunction) => {
+// GET /api/matches/queue/status - Check matchmaking status
+router.get('/queue/status', requireAuth, (req: Request, res: Response) => {
+  const status = getQueueStatus(req.user!.id);
+  res.status(200).json({ success: true, data: status || { inQueue: false } });
+});
+
+// POST /api/matches/queue/join - Join matchmaking queue
+router.post('/queue/join', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { code } = req.params;
-    const match = await prisma.match.findUnique({
-      where: { code },
-      include: {
-        player1: {
-          select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
-        },
-        player2: {
-          select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
-        },
-        problem: true,
-        submissions: {
-          include: {
-            user: { select: { id: true, username: true, avatarUrl: true } },
-          },
-          orderBy: { submittedAt: 'desc' },
-        },
-      },
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user) throw new NotFoundError('User not found');
+
+    const result = joinQueue({
+      userId: user.id,
+      username: user.username,
+      rating: user.arenaRating,
     });
 
-    if (!match) {
-      res.status(404).json({ success: false, message: `Match '${code}' not found` });
-      return;
-    }
-
-    res.status(200).json({ success: true, data: match });
+    res.status(200).json({ success: true, message: 'Joined matchmaking queue', data: result });
   } catch (error) {
     next(error);
   }
 });
+
+// POST /api/matches/queue/leave - Leave matchmaking queue
+router.post('/queue/leave', requireAuth, (req: Request, res: Response) => {
+  const left = leaveQueue(req.user!.id);
+  res.status(200).json({ success: true, message: left ? 'Left queue' : 'Was not in queue' });
+});
+
+// GET /api/matches/submissions/status/:jobId - Poll async execution status
+router.get('/submissions/status/:jobId', (req: Request, res: Response) => {
+  const status = getJudgeJobStatus(req.params.jobId);
+  if (!status) {
+    res.status(404).json({ success: false, message: 'Judge job not found' });
+    return;
+  }
+  res.status(200).json({ success: true, data: status });
+});
+
+// GET /api/matches/:code - Get single match details
+router.get(
+  '/:code',
+  validateRequest({ params: matchCodeParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { code } = req.params;
+      const match = await prisma.match.findUnique({
+        where: { code },
+        include: {
+          player1: {
+            select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
+          },
+          player2: {
+            select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
+          },
+          problem: true,
+          submissions: {
+            include: {
+              user: { select: { id: true, username: true, avatarUrl: true } },
+            },
+            orderBy: { submittedAt: 'desc' },
+          },
+        },
+      });
+
+      if (!match) {
+        throw new NotFoundError(`Match '${code}' not found`);
+      }
+
+      res.status(200).json({ success: true, data: match });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 // POST /api/matches/create - Create a new 1v1 match room
-router.post('/create', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { problemId, player1Username, durationSeconds } = req.body;
-
-    if (!player1Username) {
-      res.status(400).json({ success: false, message: 'player1Username is required' });
-      return;
-    }
-
-    // Find host player
-    const user = await prisma.user.findUnique({
-      where: { username: player1Username },
-    });
-
-    if (!user) {
-      res.status(400).json({ success: false, message: 'Valid host user required' });
-      return;
-    }
-
-    // Find problem or pick first one
-    const problem = problemId
-      ? await prisma.problem.findUnique({ where: { id: problemId } })
-      : await prisma.problem.findFirst();
-
-    if (!problem) {
-      res.status(400).json({ success: false, message: 'No problem available to start match' });
-      return;
-    }
-
-    const roomCode = `ARENA-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-
-    const match = await prisma.match.create({
-      data: {
-        code: roomCode,
-        player1Id: user.id,
-        problemId: problem.id,
-        status: 'WAITING',
-        durationSeconds: durationSeconds || 900,
-      },
-      include: {
-        player1: true,
-        problem: true,
-      },
-    });
-
-    res.status(201).json({ success: true, message: 'Arena room created', data: match });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/matches/:code/join - Join as Player 2
-router.post('/:code/join', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { code } = req.params;
-    const { username } = req.body;
-
-    const match = await prisma.match.findUnique({ where: { code } });
-    if (!match) {
-      res.status(404).json({ success: false, message: 'Match not found' });
-      return;
-    }
-
-    if (match.player2Id) {
-      res.status(400).json({ success: false, message: 'Match already has 2 players' });
-      return;
-    }
-
-    const player2 = await prisma.user.findFirst({
-      where: username ? { username } : { NOT: { id: match.player1Id } },
-    });
-
-    if (!player2) {
-      res.status(400).json({ success: false, message: 'Opponent player not found' });
-      return;
-    }
-
-    const updatedMatch = await prisma.match.update({
-      where: { code },
-      data: {
-        player2Id: player2.id,
-        status: 'IN_PROGRESS',
-        startedAt: new Date(),
-      },
-      include: {
-        player1: true,
-        player2: true,
-        problem: true,
-      },
-    });
-
-    res.status(200).json({ success: true, message: 'Player joined match', data: updatedMatch });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/matches/:code/submit - Submit code and evaluate test cases
-router.post('/:code/submit', rateLimiter(10), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { code } = req.params;
-    const { username, codeContent, language = 'javascript' } = req.body;
-
-    const match = await prisma.match.findUnique({
-      where: { code },
-      include: {
-        problem: true,
-        player1: true,
-        player2: true,
-      },
-    });
-
-    if (!match) {
-      res.status(404).json({ success: false, message: 'Match not found' });
-      return;
-    }
-
-    if (!username) {
-      res.status(400).json({ success: false, message: 'username is required for submission' });
-      return;
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { username },
-    });
-
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found' });
-      return;
-    }
-
-    // Only participants can submit
-    const isParticipant = user.id === match.player1Id || user.id === match.player2Id;
-    if (!isParticipant) {
-      res.status(403).json({ success: false, message: 'You are not a participant in this match' });
-      return;
-    }
-
-    // Cannot submit to a match that hasn't started yet
-    if (match.status === 'WAITING') {
-      res.status(400).json({ success: false, message: 'Match has not started yet — waiting for opponent' });
-      return;
-    }
-
-    // Cannot submit to a completed match
-    if (match.status === 'COMPLETED') {
-      res.status(400).json({ success: false, message: 'Match is already completed' });
-      return;
-    }
-
-    if (!codeContent || typeof codeContent !== 'string' || codeContent.trim().length === 0) {
-      res.status(400).json({ success: false, message: 'codeContent is required' });
-      return;
-    }
-
-    let parsedTestCases: TestCase[] = [];
+router.post(
+  '/create',
+  optionalAuth,
+  validateRequest({ body: createMatchSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
-      parsedTestCases = JSON.parse(match.problem.testCases);
-    } catch {
-      parsedTestCases = [];
-    }
+      const { problemId, player1Username, durationSeconds } = req.body;
+      const effectiveUsername = req.user?.username || player1Username;
 
-    // Evaluate in safe VM
-    const verdict = await evaluateSubmission(codeContent, parsedTestCases, undefined, language);
+      if (!effectiveUsername) {
+        throw new BadRequestError('Player 1 username is required (or log in)');
+      }
 
-    // Save submission record
-    const submission = await prisma.submission.create({
-      data: {
-        matchId: match.id,
-        userId: user.id,
-        problemId: match.problemId,
-        language,
-        code: codeContent,
-        status: verdict.status,
-        passedCount: verdict.passedCount,
-        totalCount: verdict.totalCount,
-        runtimeMs: verdict.runtimeMs,
-      },
-    });
+      const host = await prisma.user.findUnique({
+        where: { username: effectiveUsername },
+      });
 
-    // Check if match should be completed
-    let updatedMatch = match;
-    if (verdict.status === 'ACCEPTED') {
-      const isPlayer1 = match.player1Id === user.id;
-      const scoreGain = Math.round(100 * (verdict.passedCount / Math.max(verdict.totalCount, 1)));
+      if (!host) {
+        throw new NotFoundError(`Host user '${effectiveUsername}' not found`);
+      }
 
-      // Determine winner and loser players
-      const winner = user;
-      const loser = isPlayer1
-        ? (match.player2 ?? null)
-        : (match.player1 ?? null);
+      const problem = await prisma.problem.findUnique({
+        where: { id: problemId },
+      });
 
-      const winnerRating = winner.arenaRating;
-      const loserRating = loser ? loser.arenaRating : 1200;
+      if (!problem) {
+        throw new NotFoundError('Selected problem does not exist');
+      }
 
-      const { gain: eloGain, loss: eloLoss } = computeElo(winnerRating, loserRating);
+      // Generate collision-resistant 6-character room code
+      const randomSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const code = `ARENA-${randomSuffix}`;
 
-      updatedMatch = await prisma.match.update({
-        where: { id: match.id },
+      const match = await prisma.match.create({
         data: {
-          status: 'COMPLETED',
-          winnerId: user.id,
-          endedAt: new Date(),
-          ...(isPlayer1 ? { player1Score: scoreGain } : { player2Score: scoreGain }),
+          code,
+          player1Id: host.id,
+          problemId: problem.id,
+          status: 'WAITING',
+          durationSeconds: durationSeconds || 900,
         },
         include: {
+          player1: {
+            select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
+          },
           problem: true,
+        },
+      });
+
+      res.status(201).json({ success: true, data: match });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /api/matches/:code/join - Join an existing match
+router.post(
+  '/:code/join',
+  optionalAuth,
+  validateRequest({ params: matchCodeParamSchema, body: joinMatchSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { code } = req.params;
+      const { player2Username } = req.body;
+      const effectiveUsername = req.user?.username || player2Username;
+
+      if (!effectiveUsername) {
+        throw new BadRequestError('Player 2 username is required (or log in)');
+      }
+
+      const match = await prisma.match.findUnique({
+        where: { code },
+        include: { player1: true },
+      });
+
+      if (!match) throw new NotFoundError(`Match '${code}' not found`);
+
+      if (match.status !== 'WAITING') {
+        throw new BadRequestError(`Match is already ${match.status.toLowerCase()}`);
+      }
+
+      const joiningPlayer = await prisma.user.findUnique({
+        where: { username: effectiveUsername },
+      });
+
+      if (!joiningPlayer) throw new NotFoundError(`Player '${effectiveUsername}' not found`);
+
+      if (match.player1Id === joiningPlayer.id) {
+        throw new BadRequestError('Cannot duel yourself. Share this link with an opponent!');
+      }
+
+      const startedAt = new Date();
+
+      const updatedMatch = await prisma.match.update({
+        where: { id: match.id },
+        data: {
+          player2Id: joiningPlayer.id,
+          status: 'IN_PROGRESS',
+          startedAt,
+        },
+        include: {
+          player1: {
+            select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
+          },
+          player2: {
+            select: { id: true, username: true, name: true, avatarUrl: true, arenaRating: true, ratingTier: true },
+          },
+          problem: true,
+        },
+      });
+
+      // Start authoritative server timer
+      startServerMatchTimer(updatedMatch.id, updatedMatch.code, updatedMatch.durationSeconds);
+
+      res.status(200).json({ success: true, data: updatedMatch });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /api/matches/:code/submit - Submit code during match
+router.post(
+  '/:code/submit',
+  rateLimiter,
+  optionalAuth,
+  validateRequest({ params: matchCodeParamSchema, body: submitMatchCodeSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { code } = req.params;
+      const { language, code: sourceCode, username } = req.body;
+      const effectiveUsername = req.user?.username || username;
+
+      if (!effectiveUsername) {
+        throw new BadRequestError('Username is required for submission (or log in)');
+      }
+
+      const match = await prisma.match.findUnique({
+        where: { code },
+        include: {
           player1: true,
           player2: true,
+          problem: true,
         },
       });
 
-      // Update winner stats with ELO gain
-      const newWinnerRating = Math.max(100, winnerRating + eloGain);
-      await prisma.user.update({
-        where: { id: winner.id },
+      if (!match) throw new NotFoundError(`Match '${code}' not found`);
+
+      if (match.status !== 'IN_PROGRESS') {
+        throw new BadRequestError(
+          match.status === 'COMPLETED' || match.status === 'DRAW'
+            ? 'This match has already concluded. Submissions are closed.'
+            : 'Match has not started yet. Waiting for opponent to join.'
+        );
+      }
+
+      const user = await prisma.user.findUnique({ where: { username: effectiveUsername } });
+      if (!user) throw new NotFoundError(`User '${effectiveUsername}' not found`);
+
+      const isParticipant = match.player1Id === user.id || match.player2Id === user.id;
+      if (!isParticipant) {
+        throw new ForbiddenError('You are not a registered participant in this duel');
+      }
+
+      // Parse test cases
+      let testCases: TestCase[] = [];
+      try {
+        testCases = JSON.parse(match.problem.testCases);
+      } catch {
+        testCases = [];
+      }
+
+      // Create pending submission record
+      const submission = await prisma.submission.create({
         data: {
-          wins: { increment: 1 },
-          streak: { increment: 1 },
-          arenaRating: newWinnerRating,
-          ratingTier: getRatingTier(newWinnerRating),
+          matchId: match.id,
+          userId: user.id,
+          problemId: match.problemId,
+          language,
+          code: sourceCode,
+          status: 'PENDING',
         },
       });
 
-      // Update loser stats with ELO loss (min rating 100)
-      if (loser) {
-        const newLoserRating = Math.max(100, loserRating - eloLoss);
-        await prisma.user.update({
-          where: { id: loser.id },
-          data: {
-            losses: { increment: 1 },
-            streak: 0,
-            arenaRating: newLoserRating,
-            ratingTier: getRatingTier(newLoserRating),
-          },
+      // Enqueue judge evaluation job
+      const { jobId } = await enqueueJudgeJob({
+        submissionId: submission.id,
+        userId: user.id,
+        problemId: match.problemId,
+        code: sourceCode,
+        language,
+        testCases,
+        timeLimitMs: match.problem.timeLimitMs,
+        matchId: match.id,
+        matchCode: match.code,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Submission enqueued for evaluation',
+        data: {
+          jobId,
+          submissionId: submission.id,
+          status: 'PENDING',
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// POST /api/matches/:code/draw - Finalize match as a draw
+router.post(
+  '/:code/draw',
+  optionalAuth,
+  validateRequest({ params: matchCodeParamSchema, body: drawMatchSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { code } = req.params;
+      const { username } = req.body;
+      const effectiveUsername = req.user?.username || username;
+
+      const match = await prisma.match.findUnique({
+        where: { code },
+        include: { player1: true, player2: true },
+      });
+
+      if (!match) throw new NotFoundError(`Match '${code}' not found`);
+
+      if (match.status === 'COMPLETED' || match.status === 'DRAW') {
+        res.status(200).json({ success: true, message: 'Match already concluded', data: match });
+        return;
+      }
+
+      if (effectiveUsername) {
+        const user = await prisma.user.findUnique({ where: { username: effectiveUsername } });
+        if (user && match.player1Id !== user.id && match.player2Id !== user.id) {
+          throw new ForbiddenError('Only match participants can trigger draw finalization');
+        }
+      }
+
+      clearMatchTimer(code);
+
+      const result = await finalizeMatchResult({
+        matchId: match.id,
+        isDraw: true,
+      });
+
+      const io = getSocketServer();
+      if (io) {
+        io.to(`match:${code}`).emit('match:concluded', {
+          matchCode: code,
+          outcome: 'DRAW',
+          reason: 'USER_FINALIZED_DRAW',
+          match: result.match,
+          eloDeltas: result.eloDeltas,
         });
       }
-    }
 
-    res.status(200).json({
-      success: true,
-      verdict,
-      submission,
-      match: updatedMatch,
-    });
-  } catch (error) {
-    next(error);
+      res.status(200).json({
+        success: true,
+        message: 'Match declared as a DRAW. Stats and ratings updated.',
+        data: result.match,
+        eloDeltas: result.eloDeltas,
+      });
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
-// POST /api/matches/:code/draw - Mark match as DRAW (e.g. time ran out)
-router.post('/:code/draw', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { code } = req.params;
-
-    const match = await prisma.match.findUnique({
-      where: { code },
-      include: { player1: true, player2: true },
-    });
-
-    if (!match) {
-      res.status(404).json({ success: false, message: 'Match not found' });
-      return;
-    }
-
-    if (match.status !== 'IN_PROGRESS') {
-      res.status(400).json({ success: false, message: `Cannot declare draw — match is ${match.status}` });
-      return;
-    }
-
-    // Mark match as DRAW
-    const updatedMatch = await prisma.match.update({
-      where: { id: match.id },
-      data: {
-        status: 'DRAW',
-        endedAt: new Date(),
-      },
-      include: { player1: true, player2: true, problem: true },
-    });
-
-    // Increment draws for both players — no ELO change
-    const updateOps: Promise<any>[] = [
-      prisma.user.update({
-        where: { id: match.player1Id },
-        data: { draws: { increment: 1 } },
-      }),
-    ];
-
-    if (match.player2Id) {
-      updateOps.push(
-        prisma.user.update({
-          where: { id: match.player2Id },
-          data: { draws: { increment: 1 } },
-        })
-      );
-    }
-
-    await Promise.all(updateOps);
-
-    res.status(200).json({ success: true, message: 'Match ended in a draw', data: updatedMatch });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// In-memory real-time match room messages and battle reactions
-interface MatchMessage {
-  id: string;
-  username: string;
-  text: string;
-  timestamp: string;
-}
-const matchMessages = new Map<string, MatchMessage[]>();
-
-// GET /api/matches/:code/messages - Retrieve live messages for match
-router.get('/:code/messages', async (req: Request, res: Response) => {
+// GET /api/matches/:code/messages - Get live chat feed
+router.get('/:code/messages', (req: Request, res: Response) => {
   const { code } = req.params;
-  const list = matchMessages.get(code) || [];
-  res.status(200).json({ success: true, data: list });
+  const messages = matchMessagesStore.get(code) || [];
+  res.status(200).json({ success: true, data: messages });
 });
 
-// POST /api/matches/:code/messages - Send a message or quick reaction
-router.post('/:code/messages', async (req: Request, res: Response, next: NextFunction) => {
-  try {
+// POST /api/matches/:code/messages - Post message or taunt
+router.post(
+  '/:code/messages',
+  validateRequest({ params: matchCodeParamSchema, body: matchMessageSchema }),
+  (req: Request, res: Response) => {
     const { code } = req.params;
-    const { username, text } = req.body;
+    const { senderUsername, text } = req.body;
 
-    if (!username || !text || typeof text !== 'string' || text.trim().length === 0) {
-      res.status(400).json({ success: false, message: 'username and non-empty text required' });
-      return;
-    }
-
-    const cleanText = text.trim().slice(0, 200); // Max 200 chars
-    const msg: MatchMessage = {
-      id: Math.random().toString(36).substring(2, 9),
-      username,
-      text: cleanText,
-      timestamp: new Date().toISOString(),
+    const newMessage: MatchMessage = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      senderUsername,
+      text,
+      createdAt: new Date().toISOString(),
     };
 
-    const currentList = matchMessages.get(code) || [];
-    currentList.push(msg);
-    // Keep max 50 recent messages per room
-    if (currentList.length > 50) currentList.shift();
-    matchMessages.set(code, currentList);
+    const existing = matchMessagesStore.get(code) || [];
+    existing.push(newMessage);
+    if (existing.length > 50) existing.shift();
+    matchMessagesStore.set(code, existing);
 
-    res.status(201).json({ success: true, data: msg, messages: currentList });
-  } catch (error) {
-    next(error);
+    const io = getSocketServer();
+    if (io) {
+      io.to(`match:${code}`).emit('match:chat-broadcast', newMessage);
+    }
+
+    res.status(201).json({ success: true, data: newMessage });
   }
-});
+);
 
 export const matchRoutes = router;
