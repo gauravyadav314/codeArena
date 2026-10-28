@@ -210,6 +210,10 @@ async function evaluateCppSubmission(
   else if (code.includes('isValid')) method = 'isValid';
   else if (code.includes('lengthOfLongestSubstring')) method = 'lengthOfLongestSubstring';
   else if (code.includes('maxArea')) method = 'maxArea';
+  else if (code.includes('climbStairs')) method = 'climbStairs';
+  else if (code.includes('maxProfit')) method = 'maxProfit';
+  else if (code.includes('maxSubArray')) method = 'maxSubArray';
+  else if (code.includes('reverseList')) method = 'reverseList';
 
   const tmpId = `judge_cpp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const srcFile = path.join(os.tmpdir(), `${tmpId}.cpp`);
@@ -269,6 +273,58 @@ async function evaluateCppSubmission(
         auto t1 = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         std::cout << "TEST_CASE_DELIM\\n{\\"testIndex\\": ${idx + 1}, \\"actual\\": " << res << ", \\"runtimeMs\\": " << ms << "}\\n";
+      }
+      `;
+    } else if (method === 'climbStairs') {
+      const n = typeof tc.input === 'number' ? tc.input : (tc.input?.n ?? 1);
+      testHarnessCalls += `
+      {
+        int n = ${n};
+        auto t0 = std::chrono::high_resolution_clock::now();
+        int res = sol.climbStairs(n);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::cout << "TEST_CASE_DELIM\\n{\\"testIndex\\": ${idx + 1}, \\"actual\\": " << res << ", \\"runtimeMs\\": " << ms << "}\\n";
+      }
+      `;
+    } else if (method === 'maxProfit') {
+      const prices = JSON.stringify(tc.input.prices || tc.input || []).replace(/\[/g, '{').replace(/\]/g, '}');
+      testHarnessCalls += `
+      {
+        std::vector<int> prices = ${prices};
+        auto t0 = std::chrono::high_resolution_clock::now();
+        int res = sol.maxProfit(prices);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::cout << "TEST_CASE_DELIM\\n{\\"testIndex\\": ${idx + 1}, \\"actual\\": " << res << ", \\"runtimeMs\\": " << ms << "}\\n";
+      }
+      `;
+    } else if (method === 'maxSubArray') {
+      const nums = JSON.stringify(tc.input.nums || tc.input || []).replace(/\[/g, '{').replace(/\]/g, '}');
+      testHarnessCalls += `
+      {
+        std::vector<int> nums = ${nums};
+        auto t0 = std::chrono::high_resolution_clock::now();
+        int res = sol.maxSubArray(nums);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::cout << "TEST_CASE_DELIM\\n{\\"testIndex\\": ${idx + 1}, \\"actual\\": " << res << ", \\"runtimeMs\\": " << ms << "}\\n";
+      }
+      `;
+    } else if (method === 'reverseList') {
+      const head = JSON.stringify(tc.input.head || tc.input || []).replace(/\[/g, '{').replace(/\]/g, '}');
+      testHarnessCalls += `
+      {
+        std::vector<int> head = ${head};
+        auto t0 = std::chrono::high_resolution_clock::now();
+        std::vector<int> res = sol.reverseList(head);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::cout << "TEST_CASE_DELIM\\n{\\"testIndex\\": ${idx + 1}, \\"actual\\": [";
+        for (size_t k = 0; k < res.size(); ++k) {
+          std::cout << res[k] << (k + 1 < res.size() ? "," : "");
+        }
+        std::cout << "], \\"runtimeMs\\": " << ms << "}\\n";
       }
       `;
     }

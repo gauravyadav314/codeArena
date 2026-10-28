@@ -164,6 +164,7 @@ export function App() {
           {activeTab === 'problems' && (
             <ProblemsView
               onChallengeProblem={handleChallengeProblem}
+              currentUser={currentUser}
             />
           )}
 

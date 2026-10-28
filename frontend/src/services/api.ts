@@ -53,6 +53,18 @@ export const api = {
     });
   },
 
+  async registerUser(payload: {
+    username: string;
+    email: string;
+    name?: string;
+    bio?: string;
+  }): Promise<{ success: boolean; message: string; data: User }> {
+    return request('/api/users/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   // Problems
   async getProblems(params?: {
     difficulty?: string;
@@ -75,6 +87,16 @@ export const api = {
     return request(`/api/problems/${encodeURIComponent(slug)}/run`, {
       method: 'POST',
       body: JSON.stringify({ code, language }),
+    });
+  },
+
+  async submitProblemCode(
+    slug: string,
+    payload: { code: string; username: string; language?: string }
+  ): Promise<{ success: boolean; verdict: JudgeVerdict; submission: Submission }> {
+    return request(`/api/problems/${encodeURIComponent(slug)}/submit`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 
@@ -122,6 +144,12 @@ export const api = {
     return request(`/api/matches/${encodeURIComponent(code)}/submit`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    });
+  },
+
+  async drawMatch(code: string): Promise<{ success: boolean; message: string; data: Match }> {
+    return request(`/api/matches/${encodeURIComponent(code)}/draw`, {
+      method: 'POST',
     });
   },
 };

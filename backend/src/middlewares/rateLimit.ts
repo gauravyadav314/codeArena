@@ -2,6 +2,16 @@ import { Request, Response, NextFunction } from 'express';
 
 const requestCounts = new Map<string, { count: number; resetAt: number }>();
 
+// Sweep expired entries every 2 minutes to keep memory footprint minimal
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of requestCounts.entries()) {
+    if (entry.resetAt < now) {
+      requestCounts.delete(ip);
+    }
+  }
+}, 2 * 60 * 1000).unref();
+
 export function rateLimiter(maxPerMinute: number) {
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || 'unknown';

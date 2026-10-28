@@ -141,13 +141,24 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     }
   };
 
-  // Timer effect for active match
+  // Timer effect for active match with auto-draw on expiration
   useEffect(() => {
     if (selectedMatch && selectedMatch.status === 'IN_PROGRESS') {
       timerRef.current = setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
             if (timerRef.current) clearInterval(timerRef.current);
+            if (selectedMatch.status === 'IN_PROGRESS') {
+              api.drawMatch(selectedMatch.code)
+                .then((res) => {
+                  if (res.success) {
+                    setSelectedMatch((m) => (m ? { ...m, status: 'DRAW' } : null));
+                    setMatchEvents((evts) => [...evts, '⌛ Time expired! Match concluded as a DRAW.']);
+                    showToast('Time limit reached — match recorded as a DRAW.', 'info');
+                  }
+                })
+                .catch(() => {});
+            }
             return 0;
           }
           return prev - 1;
@@ -159,7 +170,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [selectedMatch]);
+  }, [selectedMatch?.code, selectedMatch?.status, showToast]);
 
   // Poll match status every 3 seconds to detect opponent joining or match completion
   useEffect(() => {

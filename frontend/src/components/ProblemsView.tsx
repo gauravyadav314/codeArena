@@ -13,8 +13,9 @@ import {
   Copy,
   Check,
   Zap,
+  Send,
 } from 'lucide-react';
-import type { Problem, JudgeVerdict } from '../types';
+import type { Problem, JudgeVerdict, User } from '../types';
 import { api } from '../services/api';
 import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
 import { renderMarkdown } from '../utils/markdown';
@@ -22,10 +23,12 @@ import { useToast } from './Toast';
 
 interface ProblemsViewProps {
   onChallengeProblem?: (problemId: string) => void;
+  currentUser?: User | null;
 }
 
 export const ProblemsView: React.FC<ProblemsViewProps> = ({
   onChallengeProblem,
+  currentUser,
 }) => {
   const { showToast } = useToast();
   const [problems, setProblems] = useState<Problem[]>([]);
@@ -40,6 +43,7 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
   const [selectedLanguage, setSelectedLanguage] = useState<string>('javascript');
   const [codeByLanguage, setCodeByLanguage] = useState<Record<string, string>>({});
   const [running, setRunning] = useState<boolean>(false);
+  const [submitting, setSubmitting] = useState<boolean>(false);
   const [verdict, setVerdict] = useState<JudgeVerdict | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const [selectedCaseIdx, setSelectedCaseIdx] = useState<number>(0);
@@ -133,6 +137,35 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
       console.error(err);
     } finally {
       setRunning(false);
+    }
+  };
+
+  const handleSubmitSolution = async () => {
+    if (!activeProblem) return;
+    if (!currentUser) {
+      showToast('Please select a player profile to record submission', 'error');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await api.submitProblemCode(activeProblem.slug, {
+        code,
+        username: currentUser.username,
+        language: selectedLanguage,
+      });
+      if (res.success) {
+        setVerdict(res.verdict);
+        setSelectedCaseIdx(0);
+        if (res.verdict.status === 'ACCEPTED') {
+          showToast('Accepted! Submission saved to profile history', 'success');
+        } else {
+          showToast(`Submission: ${res.verdict.status.replace(/_/g, ' ')}`, 'error');
+        }
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Submission failed', 'error');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -245,14 +278,24 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
                 <Zap size={14} className="text-amber" />
                 <span>Sandboxed in Node.js VM engine</span>
               </div>
-              <button
-                className="btn-run-tests"
-                onClick={handleRunCode}
-                disabled={running}
-              >
-                <Play size={16} />
-                <span>{running ? 'Evaluating Code...' : 'Run Test Cases'}</span>
-              </button>
+              <div className="action-btn-group">
+                <button
+                  className="btn-run-tests"
+                  onClick={handleRunCode}
+                  disabled={running || submitting}
+                >
+                  <Play size={16} />
+                  <span>{running ? 'Evaluating...' : 'Run Test Cases'}</span>
+                </button>
+                <button
+                  className="btn-submit-solution"
+                  onClick={handleSubmitSolution}
+                  disabled={submitting || running}
+                >
+                  <Send size={16} />
+                  <span>{submitting ? 'Submitting...' : 'Submit Solution'}</span>
+                </button>
+              </div>
             </div>
 
             {/* Verdict Output */}
