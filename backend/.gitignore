@@ -4,3 +4,9 @@ dist/
 .env.*
 !.env.example
 *.log
+
+# SQLite database files
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db-shm
+prisma/*.db-wal
