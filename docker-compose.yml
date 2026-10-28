@@ -1,0 +1,39 @@
+version: '3.9'
+
+# CodeArena – Local Development Stack
+# Usage: docker compose up
+# Requirements: Docker + Docker Compose
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codearena-backend
+    ports:
+      - '5001:5001'
+    environment:
+      PORT: 5001
+      NODE_ENV: development
+      CLIENT_ORIGIN: http://localhost:5173
+      DATABASE_URL: file:./dev.db
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: npm run dev
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: codearena-frontend
+    ports:
+      - '5173:5173'
+    environment:
+      VITE_API_BASE_URL: http://localhost:5001
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: npm run dev -- --host 0.0.0.0

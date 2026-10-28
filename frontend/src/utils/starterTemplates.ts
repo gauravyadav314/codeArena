@@ -14,6 +14,216 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
 ];
 
 export const PROBLEM_TEMPLATES: Record<string, Record<string, string>> = {
+  'climbing-stairs': {
+    javascript: `function climbStairs(n) {
+  // Write your solution here
+  if (n <= 2) return n;
+  let a = 1, b = 2;
+  for (let i = 3; i <= n; i++) {
+    [a, b] = [b, a + b];
+  }
+  return b;
+}`,
+    typescript: `function climbStairs(n: number): number {
+  // Write your solution here
+  if (n <= 2) return n;
+  let a = 1, b = 2;
+  for (let i = 3; i <= n; i++) {
+    [a, b] = [b, a + b];
+  }
+  return b;
+}`,
+    python: `def climbStairs(n: int) -> int:
+    # Write your solution here
+    if n <= 2:
+        return n
+    a, b = 1, 2
+    for _ in range(3, n + 1):
+        a, b = b, a + b
+    return b
+`,
+    cpp: `class Solution {
+public:
+    int climbStairs(int n) {
+        // Write your solution here
+        if (n <= 2) return n;
+        int a = 1, b = 2;
+        for (int i = 3; i <= n; i++) {
+            int c = a + b;
+            a = b;
+            b = c;
+        }
+        return b;
+    }
+};`,
+    java: `class Solution {
+    public int climbStairs(int n) {
+        // Write your solution here
+        if (n <= 2) return n;
+        int a = 1, b = 2;
+        for (int i = 3; i <= n; i++) {
+            int c = a + b;
+            a = b;
+            b = c;
+        }
+        return b;
+    }
+}`,
+  },
+
+  'best-time-to-buy-and-sell-stock': {
+    javascript: `function maxProfit(prices) {
+  // Write your solution here
+  let minPrice = Infinity;
+  let maxProfit = 0;
+  for (const price of prices) {
+    if (price < minPrice) {
+      minPrice = price;
+    } else if (price - minPrice > maxProfit) {
+      maxProfit = price - minPrice;
+    }
+  }
+  return maxProfit;
+}`,
+    typescript: `function maxProfit(prices: number[]): number {
+  // Write your solution here
+  let minPrice = Infinity;
+  let maxProfit = 0;
+  for (const price of prices) {
+    if (price < minPrice) {
+      minPrice = price;
+    } else if (price - minPrice > maxProfit) {
+      maxProfit = price - minPrice;
+    }
+  }
+  return maxProfit;
+}`,
+    python: `def maxProfit(prices: list[int]) -> int:
+    # Write your solution here
+    min_price = float('inf')
+    max_profit = 0
+    for price in prices:
+        if price < min_price:
+            min_price = price
+        elif price - min_price > max_profit:
+            max_profit = price - min_price
+    return max_profit
+`,
+    cpp: `#include <vector>
+#include <algorithm>
+using namespace std;
+
+class Solution {
+public:
+    int maxProfit(vector<int>& prices) {
+        int minPrice = INT_MAX, maxProfit = 0;
+        for (int price : prices) {
+            minPrice = min(minPrice, price);
+            maxProfit = max(maxProfit, price - minPrice);
+        }
+        return maxProfit;
+    }
+};`,
+    java: `class Solution {
+    public int maxProfit(int[] prices) {
+        int minPrice = Integer.MAX_VALUE, maxProfit = 0;
+        for (int price : prices) {
+            minPrice = Math.min(minPrice, price);
+            maxProfit = Math.max(maxProfit, price - minPrice);
+        }
+        return maxProfit;
+    }
+}`,
+  },
+
+  'maximum-subarray': {
+    javascript: `function maxSubArray(nums) {
+  // Write your solution here (Kadane's algorithm)
+  let maxSum = nums[0];
+  let currentSum = nums[0];
+  for (let i = 1; i < nums.length; i++) {
+    currentSum = Math.max(nums[i], currentSum + nums[i]);
+    maxSum = Math.max(maxSum, currentSum);
+  }
+  return maxSum;
+}`,
+    typescript: `function maxSubArray(nums: number[]): number {
+  // Write your solution here
+  let maxSum = nums[0];
+  let currentSum = nums[0];
+  for (let i = 1; i < nums.length; i++) {
+    currentSum = Math.max(nums[i], currentSum + nums[i]);
+    maxSum = Math.max(maxSum, currentSum);
+  }
+  return maxSum;
+}`,
+    python: `def maxSubArray(nums: list[int]) -> int:
+    # Write your solution here
+    max_sum = nums[0]
+    current_sum = nums[0]
+    for num in nums[1:]:
+        current_sum = max(num, current_sum + num)
+        max_sum = max(max_sum, current_sum)
+    return max_sum
+`,
+    cpp: `#include <vector>
+#include <algorithm>
+using namespace std;
+
+class Solution {
+public:
+    int maxSubArray(vector<int>& nums) {
+        int maxSum = nums[0], currentSum = nums[0];
+        for (int i = 1; i < (int)nums.size(); i++) {
+            currentSum = max(nums[i], currentSum + nums[i]);
+            maxSum = max(maxSum, currentSum);
+        }
+        return maxSum;
+    }
+};`,
+    java: `class Solution {
+    public int maxSubArray(int[] nums) {
+        int maxSum = nums[0], currentSum = nums[0];
+        for (int i = 1; i < nums.length; i++) {
+            currentSum = Math.max(nums[i], currentSum + nums[i]);
+            maxSum = Math.max(maxSum, currentSum);
+        }
+        return maxSum;
+    }
+}`,
+  },
+
+  'reverse-linked-list': {
+    javascript: `function reverseList(head) {
+  // head is an array; return the reversed array
+  return head.slice().reverse();
+}`,
+    typescript: `function reverseList(head: number[]): number[] {
+  return head.slice().reverse();
+}`,
+    python: `def reverseList(head: list) -> list:
+    return head[::-1]
+`,
+    cpp: `#include <vector>
+using namespace std;
+
+class Solution {
+public:
+    vector<int> reverseList(vector<int>& head) {
+        return vector<int>(head.rbegin(), head.rend());
+    }
+};`,
+    java: `class Solution {
+    public int[] reverseList(int[] head) {
+        int[] result = new int[head.length];
+        for (int i = 0; i < head.length; i++) {
+            result[i] = head[head.length - 1 - i];
+        }
+        return result;
+    }
+}`,
+  },
+
   'two-sum': {
     javascript: `function twoSum(nums, target) {
   // Write your solution here

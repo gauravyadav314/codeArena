@@ -58,6 +58,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   const [victoryModalOpen, setVictoryModalOpen] = useState<boolean>(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load matches and problems on mount
   const loadArenaData = async () => {
@@ -156,6 +157,50 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [selectedMatch]);
+
+  // Poll match status every 3 seconds to detect opponent joining or match completion
+  useEffect(() => {
+    if (!selectedMatch || selectedMatch.status === 'COMPLETED') {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await api.getMatch(selectedMatch.code);
+        if (res.success) {
+          const updated = res.data;
+          setSelectedMatch((prev) => {
+            if (!prev) return updated;
+            // Detect opponent just joined
+            if (!prev.player2 && updated.player2) {
+              setMatchEvents((evts) => [
+                ...evts,
+                `⚔️ Challenger @${updated.player2!.username} has entered the arena!`,
+              ]);
+            }
+            // Detect match completed by opponent
+            if (prev.status !== 'COMPLETED' && updated.status === 'COMPLETED') {
+              setVictoryModalOpen(true);
+              setMatchEvents((evts) => [
+                ...evts,
+                `🏁 Match ended! Winner: @${updated.winnerId === updated.player1?.id
+                  ? updated.player1?.username
+                  : updated.player2?.username || 'Unknown'}`,
+              ]);
+            }
+            return { ...prev, ...updated, problem: prev.problem };
+          });
+        }
+      } catch {
+        // silently ignore poll errors
+      }
+    }, 3000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [selectedMatch?.code, selectedMatch?.status]);
 
   // Host new match
   const handleCreateMatch = async (e: React.FormEvent) => {
@@ -257,7 +302,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     if (!selectedMatch) return;
     setRunningTests(true);
     try {
-      const res = await api.runProblemCode(selectedMatch.problem.slug, code);
+      const res = await api.runProblemCode(selectedMatch.problem.slug, code, selectedLanguage);
       if (res.success) {
         setVerdict(res.verdict);
         setSelectedTestCaseIndex(0);

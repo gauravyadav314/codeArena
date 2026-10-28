@@ -65,8 +65,13 @@ router.post('/sync-profile', async (req: Request, res: Response, next: NextFunct
       codechefRating,
     } = req.body;
 
+    if (!username) {
+      res.status(400).json({ success: false, message: 'username is required' });
+      return;
+    }
+
     const user = await prisma.user.findUnique({
-      where: { username: username || 'gauravyadav' },
+      where: { username },
       include: { profile: true },
     });
 

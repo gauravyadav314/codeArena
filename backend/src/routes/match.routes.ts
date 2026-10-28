@@ -78,9 +78,14 @@ router.post('/create', async (req: Request, res: Response, next: NextFunction) =
   try {
     const { problemId, player1Username, durationSeconds } = req.body;
 
+    if (!player1Username) {
+      res.status(400).json({ success: false, message: 'player1Username is required' });
+      return;
+    }
+
     // Find host player
-    const user = await prisma.user.findFirst({
-      where: player1Username ? { username: player1Username } : undefined,
+    const user = await prisma.user.findUnique({
+      where: { username: player1Username },
     });
 
     if (!user) {
@@ -98,7 +103,7 @@ router.post('/create', async (req: Request, res: Response, next: NextFunction) =
       return;
     }
 
-    const roomCode = `ARENA-${Math.floor(100 + Math.random() * 900)}`;
+    const roomCode = `ARENA-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     const match = await prisma.match.create({
       data: {
@@ -186,12 +191,35 @@ router.post('/:code/submit', async (req: Request, res: Response, next: NextFunct
       return;
     }
 
+    if (!username) {
+      res.status(400).json({ success: false, message: 'username is required for submission' });
+      return;
+    }
+
     const user = await prisma.user.findUnique({
-      where: { username: username || 'gauravyadav' },
+      where: { username },
     });
 
     if (!user) {
       res.status(404).json({ success: false, message: 'User not found' });
+      return;
+    }
+
+    // Only participants can submit
+    const isParticipant = user.id === match.player1Id || user.id === match.player2Id;
+    if (!isParticipant) {
+      res.status(403).json({ success: false, message: 'You are not a participant in this match' });
+      return;
+    }
+
+    // Cannot submit to a completed match
+    if (match.status === 'COMPLETED') {
+      res.status(400).json({ success: false, message: 'Match is already completed' });
+      return;
+    }
+
+    if (!codeContent || typeof codeContent !== 'string' || codeContent.trim().length === 0) {
+      res.status(400).json({ success: false, message: 'codeContent is required' });
       return;
     }
 

@@ -284,6 +284,177 @@ Output: 49
     },
   });
 
+  const p5 = await prisma.problem.create({
+    data: {
+      title: 'Climbing Stairs',
+      slug: 'climbing-stairs',
+      difficulty: 'Easy',
+      category: 'Dynamic Programming',
+      description: `You are climbing a staircase. It takes \`n\` steps to reach the top.
+
+Each time you can either climb \`1\` or \`2\` steps. In how many distinct ways can you climb to the top?
+
+### Example 1:
+\`\`\`
+Input: n = 2
+Output: 2
+Explanation: There are two ways to climb to the top.
+1. 1 step + 1 step
+2. 2 steps
+\`\`\`
+
+### Example 2:
+\`\`\`
+Input: n = 3
+Output: 3
+Explanation: There are three ways to climb to the top.
+1. 1 step + 1 step + 1 step
+2. 1 step + 2 steps
+3. 2 steps + 1 step
+\`\`\`
+
+### Constraints:
+- 1 <= n <= 45`,
+      starterCode: `function climbStairs(n) {
+  // Write your solution here
+  if (n <= 2) return n;
+  let a = 1, b = 2;
+  for (let i = 3; i <= n; i++) {
+    [a, b] = [b, a + b];
+  }
+  return b;
+}`,
+      testCases: JSON.stringify([
+        { input: 2, expected: 2 },
+        { input: 3, expected: 3 },
+        { input: 5, expected: 8 },
+        { input: 10, expected: 89 },
+      ]),
+      timeLimitMs: 1000,
+      memoryLimitMb: 128,
+      acceptanceRate: 51.8,
+    },
+  });
+
+  const p6 = await prisma.problem.create({
+    data: {
+      title: 'Best Time to Buy and Sell Stock',
+      slug: 'best-time-to-buy-and-sell-stock',
+      difficulty: 'Easy',
+      category: 'Arrays & Hashing',
+      description: `You are given an array \`prices\` where \`prices[i]\` is the price of a given stock on the \`i-th\` day.
+
+You want to maximize your profit by choosing a **single day** to buy one stock and choosing a **different day in the future** to sell that stock.
+
+Return the maximum profit you can achieve from this transaction. If you cannot achieve any profit, return \`0\`.
+
+### Example:
+\`\`\`
+Input: prices = [7,1,5,3,6,4]
+Output: 5
+Explanation: Buy on day 2 (price = 1) and sell on day 5 (price = 6), profit = 6-1 = 5.
+\`\`\`
+
+### Constraints:
+- 1 <= prices.length <= 10^5
+- 0 <= prices[i] <= 10^4`,
+      starterCode: `function maxProfit(prices) {
+  // Write your solution here
+  let minPrice = Infinity;
+  let maxProfit = 0;
+  for (const price of prices) {
+    if (price < minPrice) {
+      minPrice = price;
+    } else if (price - minPrice > maxProfit) {
+      maxProfit = price - minPrice;
+    }
+  }
+  return maxProfit;
+}`,
+      testCases: JSON.stringify([
+        { input: { prices: [7, 1, 5, 3, 6, 4] }, expected: 5 },
+        { input: { prices: [7, 6, 4, 3, 1] }, expected: 0 },
+        { input: { prices: [1, 2] }, expected: 1 },
+      ]),
+      timeLimitMs: 1500,
+      memoryLimitMb: 256,
+      acceptanceRate: 54.2,
+    },
+  });
+
+  const p7 = await prisma.problem.create({
+    data: {
+      title: 'Maximum Subarray',
+      slug: 'maximum-subarray',
+      difficulty: 'Medium',
+      category: 'Dynamic Programming',
+      description: `Given an integer array \`nums\`, find the subarray with the largest sum, and return its sum.
+
+### Example:
+\`\`\`
+Input: nums = [-2,1,-3,4,-1,2,1,-5,4]
+Output: 6
+Explanation: The subarray [4,-1,2,1] has the largest sum 6.
+\`\`\`
+
+### Constraints:
+- 1 <= nums.length <= 10^5
+- -10^4 <= nums[i] <= 10^4`,
+      starterCode: `function maxSubArray(nums) {
+  // Write your solution here (Kadane's algorithm)
+  let maxSum = nums[0];
+  let currentSum = nums[0];
+  for (let i = 1; i < nums.length; i++) {
+    currentSum = Math.max(nums[i], currentSum + nums[i]);
+    maxSum = Math.max(maxSum, currentSum);
+  }
+  return maxSum;
+}`,
+      testCases: JSON.stringify([
+        { input: { nums: [-2, 1, -3, 4, -1, 2, 1, -5, 4] }, expected: 6 },
+        { input: { nums: [1] }, expected: 1 },
+        { input: { nums: [5, 4, -1, 7, 8] }, expected: 23 },
+      ]),
+      timeLimitMs: 2000,
+      memoryLimitMb: 256,
+      acceptanceRate: 50.1,
+    },
+  });
+
+  const p8 = await prisma.problem.create({
+    data: {
+      title: 'Reverse Linked List',
+      slug: 'reverse-linked-list',
+      difficulty: 'Easy',
+      category: 'Linked List',
+      description: `Given the head of a singly linked list, reverse the list, and return the reversed list.
+
+For this problem, the input is an array representing the linked list values. Return the array in reversed order.
+
+### Example:
+\`\`\`
+Input: head = [1,2,3,4,5]
+Output: [5,4,3,2,1]
+\`\`\`
+
+### Constraints:
+- The number of nodes in the list is the range [0, 5000]
+- -5000 <= Node.val <= 5000`,
+      starterCode: `function reverseList(head) {
+  // head is an array; return the reversed array
+  return head.slice().reverse();
+}`,
+      testCases: JSON.stringify([
+        { input: { head: [1, 2, 3, 4, 5] }, expected: [5, 4, 3, 2, 1] },
+        { input: { head: [1, 2] }, expected: [2, 1] },
+        { input: { head: [] }, expected: [] },
+      ]),
+      timeLimitMs: 1000,
+      memoryLimitMb: 128,
+      acceptanceRate: 72.8,
+    },
+  });
+
   console.log('[Seed] Seeding Sample Arena Match...');
   const match = await prisma.match.create({
     data: {
