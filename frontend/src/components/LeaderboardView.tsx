@@ -108,7 +108,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
           </div>
           <div className="summary-pill">
             <span className="summary-val text-rose">
-              {Math.max(...users.map((u) => u.streak), 8)}
+              {users.length > 0 ? Math.max(...users.map((u) => u.streak)) : 0}
             </span>
             <span className="summary-lbl">Top Streak</span>
           </div>

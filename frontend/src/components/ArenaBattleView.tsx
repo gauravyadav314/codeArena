@@ -21,6 +21,8 @@ import {
 import type { Match, Problem, User, JudgeVerdict } from '../types';
 import { api } from '../services/api';
 import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
+import { renderMarkdown } from '../utils/markdown';
+import { useToast } from './Toast';
 
 interface ArenaBattleViewProps {
   currentUser: User | null;
@@ -33,6 +35,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   users,
   onRefreshUsers,
 }) => {
+  const { showToast } = useToast();
   const [matches, setMatches] = useState<Match[]>([]);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -217,9 +220,10 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
         setShowCreateModal(false);
         await loadArenaData();
         enterMatch(res.data.code);
+        showToast(`Match ${res.data.code} created!`, 'success');
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create match');
+      showToast(err instanceof Error ? err.message : 'Failed to create match', 'error');
     } finally {
       setCreating(false);
     }
@@ -233,9 +237,10 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       if (res.success) {
         await loadArenaData();
         enterMatch(matchCode);
+        showToast(`Joined match ${matchCode}!`, 'success');
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to join match');
+      showToast(err instanceof Error ? err.message : 'Failed to join match', 'error');
     }
   };
 
@@ -349,17 +354,19 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
             ...prev,
             `🎉 ACCEPTED! @${currentUser.username} submitted full solution and claimed victory!`,
           ]);
+          showToast('Accepted! Victory claimed!', 'success');
           onRefreshUsers();
         } else {
           setMatchEvents((prev) => [
             ...prev,
             `Submission: ${res.verdict.status} (${res.verdict.passedCount}/${res.verdict.totalCount} tests passed)`,
           ]);
+          showToast(`Verdict: ${res.verdict.status}`, 'error');
         }
         await loadArenaData();
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Submission failed');
+      showToast(err instanceof Error ? err.message : 'Submission failed', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -369,6 +376,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   const handleCopyCode = () => {
     navigator.clipboard.writeText(code);
     setCopiedCode(true);
+    showToast('Code copied to clipboard', 'info');
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
@@ -764,7 +772,10 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
 
             <div className="problem-text-content">
               <h3>Problem Description</h3>
-              <p className="problem-desc-paragraph">{selectedMatch.problem.description}</p>
+              <div
+                className="problem-md-content"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedMatch.problem.description) }}
+              />
             </div>
 
             {/* Live Arena Events Feed */}

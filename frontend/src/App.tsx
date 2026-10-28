@@ -5,6 +5,7 @@ import { ProblemsView } from './components/ProblemsView';
 import { LeaderboardView } from './components/LeaderboardView';
 import { ProfileView } from './components/ProfileView';
 import { TelemetryView } from './components/TelemetryView';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import type { HealthResponse } from './components/HealthProbeCard';
 import type { User } from './types';
 import { api } from './services/api';
@@ -151,44 +152,46 @@ export function App() {
       />
 
       <main className="main-content">
-        {activeTab === 'arena' && (
-          <ArenaBattleView
-            currentUser={currentUser}
-            users={users}
-            onRefreshUsers={fetchUsers}
-          />
-        )}
+        <ErrorBoundary>
+          {activeTab === 'arena' && (
+            <ArenaBattleView
+              currentUser={currentUser}
+              users={users}
+              onRefreshUsers={fetchUsers}
+            />
+          )}
 
-        {activeTab === 'problems' && (
-          <ProblemsView
-            onChallengeProblem={handleChallengeProblem}
-          />
-        )}
+          {activeTab === 'problems' && (
+            <ProblemsView
+              onChallengeProblem={handleChallengeProblem}
+            />
+          )}
 
-        {activeTab === 'leaderboard' && (
-          <LeaderboardView
-            currentUser={currentUser}
-            onChallengeUser={handleChallengeUser}
-          />
-        )}
+          {activeTab === 'leaderboard' && (
+            <LeaderboardView
+              currentUser={currentUser}
+              onChallengeUser={handleChallengeUser}
+            />
+          )}
 
-        {activeTab === 'profile' && (
-          <ProfileView
-            currentUser={currentUser}
-            onProfileUpdated={fetchUsers}
-          />
-        )}
+          {activeTab === 'profile' && (
+            <ProfileView
+              currentUser={currentUser}
+              onProfileUpdated={fetchUsers}
+            />
+          )}
 
-        {activeTab === 'telemetry' && (
-          <TelemetryView
-            healthData={healthData}
-            loading={loading}
-            error={error}
-            latency={latency}
-            onRefresh={checkHealth}
-            apiUrl={apiUrl}
-          />
-        )}
+          {activeTab === 'telemetry' && (
+            <TelemetryView
+              healthData={healthData}
+              loading={loading}
+              error={error}
+              latency={latency}
+              onRefresh={checkHealth}
+              apiUrl={apiUrl}
+            />
+          )}
+        </ErrorBoundary>
       </main>
 
       <footer className="footer">

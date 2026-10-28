@@ -1,5 +1,5 @@
 import React from 'react';
-import { Swords, Code2, Trophy, UserCircle, Activity, ChevronDown, Check, Sun, Moon } from 'lucide-react';
+import { Swords, Code2, Trophy, UserCircle, Activity, ChevronDown, Check, Sun, Moon, Menu, X } from 'lucide-react';
 import type { User } from '../types';
 
 export type TabType = 'arena' | 'problems' | 'leaderboard' | 'profile' | 'telemetry';
@@ -29,6 +29,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleTheme,
 }) => {
   const [userDropdownOpen, setUserDropdownOpen] = React.useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -56,10 +57,13 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="nav-tabs">
+        <nav className={`nav-tabs ${mobileMenuOpen ? 'mobile-open' : ''}`}>
           <button
             className={`nav-tab-btn ${activeTab === 'arena' ? 'active' : ''}`}
-            onClick={() => onTabChange('arena')}
+            onClick={() => {
+              onTabChange('arena');
+              setMobileMenuOpen(false);
+            }}
           >
             <Swords size={16} />
             <span>1v1 Arena</span>
@@ -68,7 +72,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             className={`nav-tab-btn ${activeTab === 'problems' ? 'active' : ''}`}
-            onClick={() => onTabChange('problems')}
+            onClick={() => {
+              onTabChange('problems');
+              setMobileMenuOpen(false);
+            }}
           >
             <Code2 size={16} />
             <span>Problems</span>
@@ -76,7 +83,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             className={`nav-tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`}
-            onClick={() => onTabChange('leaderboard')}
+            onClick={() => {
+              onTabChange('leaderboard');
+              setMobileMenuOpen(false);
+            }}
           >
             <Trophy size={16} />
             <span>Leaderboard</span>
@@ -84,7 +94,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             className={`nav-tab-btn ${activeTab === 'profile' ? 'active' : ''}`}
-            onClick={() => onTabChange('profile')}
+            onClick={() => {
+              onTabChange('profile');
+              setMobileMenuOpen(false);
+            }}
           >
             <UserCircle size={16} />
             <span>Rating Profile</span>
@@ -92,7 +105,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             className={`nav-tab-btn ${activeTab === 'telemetry' ? 'active' : ''}`}
-            onClick={() => onTabChange('telemetry')}
+            onClick={() => {
+              onTabChange('telemetry');
+              setMobileMenuOpen(false);
+            }}
           >
             <Activity size={16} />
             <span>Telemetry</span>
@@ -181,6 +197,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                 : 'Offline'}
             </span>
           </div>
+          {/* Mobile Menu Hamburger */}
+          <button
+            className="mobile-menu-toggle"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Toggle navigation menu"
+          >
+            {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
         </div>
       </div>
     </header>

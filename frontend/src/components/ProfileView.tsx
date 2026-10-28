@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { User, Submission } from '../types';
 import { api } from '../services/api';
+import { useToast } from './Toast';
 
 interface ProfileViewProps {
   currentUser: User | null;
@@ -22,6 +23,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   currentUser,
   onProfileUpdated,
 }) => {
+  const { showToast } = useToast();
   const [profileUser, setProfileUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [showSyncModal, setShowSyncModal] = useState<boolean>(false);
@@ -85,9 +87,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         setShowSyncModal(false);
         await fetchFullProfile();
         onProfileUpdated();
+        showToast('Ratings and profiles synchronized!', 'success');
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Sync failed');
+      showToast(err instanceof Error ? err.message : 'Sync failed', 'error');
     } finally {
       setSyncing(false);
     }

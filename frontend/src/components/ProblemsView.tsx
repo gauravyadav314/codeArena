@@ -17,6 +17,8 @@ import {
 import type { Problem, JudgeVerdict } from '../types';
 import { api } from '../services/api';
 import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
+import { renderMarkdown } from '../utils/markdown';
+import { useToast } from './Toast';
 
 interface ProblemsViewProps {
   onChallengeProblem?: (problemId: string) => void;
@@ -25,6 +27,7 @@ interface ProblemsViewProps {
 export const ProblemsView: React.FC<ProblemsViewProps> = ({
   onChallengeProblem,
 }) => {
+  const { showToast } = useToast();
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>('');
@@ -48,6 +51,7 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
     'Sliding Window',
     'Two Pointers',
     'Dynamic Programming',
+    'Linked List',
     'Trees',
   ];
 
@@ -118,8 +122,14 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
       if (res.success) {
         setVerdict(res.verdict);
         setSelectedCaseIdx(0);
+        if (res.verdict.status === 'ACCEPTED') {
+          showToast('All test cases passed!', 'success');
+        } else {
+          showToast(`Verdict: ${res.verdict.status.replace(/_/g, ' ')}`, 'error');
+        }
       }
     } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Evaluation failed', 'error');
       console.error(err);
     } finally {
       setRunning(false);
@@ -129,6 +139,7 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
     setCopied(true);
+    showToast('Code copied to clipboard', 'info');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -175,7 +186,10 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
 
             <div className="desc-body">
               <h3>Problem Statement</h3>
-              <p>{activeProblem.description}</p>
+              <div
+                className="problem-md-content"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(activeProblem.description) }}
+              />
             </div>
           </div>
 
