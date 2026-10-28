@@ -23,6 +23,8 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>('');
+  const [selectedTier, setSelectedTier] = useState<string>('All');
+  const [sortBy, setSortBy] = useState<'rating' | 'winrate' | 'streak' | 'wins'>('rating');
 
   const fetchLeaderboard = async () => {
     setLoading(true);
@@ -42,14 +44,30 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
     fetchLeaderboard();
   }, []);
 
-  const filteredUsers = users.filter((u) => {
-    const term = search.toLowerCase();
-    return (
-      u.username.toLowerCase().includes(term) ||
-      (u.name && u.name.toLowerCase().includes(term)) ||
-      u.ratingTier.toLowerCase().includes(term)
-    );
-  });
+  const filteredUsers = users
+    .filter((u) => {
+      const term = search.toLowerCase();
+      const matchesSearch =
+        u.username.toLowerCase().includes(term) ||
+        (u.name && u.name.toLowerCase().includes(term)) ||
+        u.ratingTier.toLowerCase().includes(term);
+
+      const matchesTier = selectedTier === 'All' || u.ratingTier.toLowerCase() === selectedTier.toLowerCase();
+      return matchesSearch && matchesTier;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'rating') return b.arenaRating - a.arenaRating;
+      if (sortBy === 'streak') return b.streak - a.streak;
+      if (sortBy === 'wins') return b.wins - a.wins;
+      if (sortBy === 'winrate') {
+        const totalA = a.wins + a.losses + a.draws;
+        const totalB = b.wins + b.losses + b.draws;
+        const rateA = totalA > 0 ? a.wins / totalA : 0;
+        const rateB = totalB > 0 ? b.wins / totalB : 0;
+        return rateB - rateA;
+      }
+      return 0;
+    });
 
   const getRankBadge = (rank: number) => {
     if (rank === 1) {
@@ -126,6 +144,35 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+        </div>
+
+        <div className="lb-filter-group">
+          <select
+            className="lb-select-control"
+            value={selectedTier}
+            onChange={(e) => setSelectedTier(e.target.value)}
+            title="Filter by Rating Tier"
+          >
+            <option value="All">All Tiers</option>
+            <option value="Grandmaster">Grandmaster</option>
+            <option value="Master">Master</option>
+            <option value="Expert">Expert</option>
+            <option value="Specialist">Specialist</option>
+            <option value="Apprentice">Apprentice</option>
+            <option value="Novice">Novice</option>
+          </select>
+
+          <select
+            className="lb-select-control"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            title="Sort Leaderboard"
+          >
+            <option value="rating">Sort by Rating</option>
+            <option value="winrate">Sort by Win Rate</option>
+            <option value="streak">Sort by Streak</option>
+            <option value="wins">Sort by Wins</option>
+          </select>
         </div>
 
         <button className="btn-refresh" onClick={fetchLeaderboard} disabled={loading}>

@@ -37,6 +37,7 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
   const [search, setSearch] = useState<string>('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [sortBy, setSortBy] = useState<'default' | 'acceptance_desc' | 'acceptance_asc' | 'title_asc'>('default');
 
   // Problem Studio (Solving mode)
   const [activeProblem, setActiveProblem] = useState<Problem | null>(null);
@@ -373,6 +374,17 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
   }
 
   // Catalog View
+  const easyCount = problems.filter((p) => p.difficulty === 'Easy').length;
+  const medCount = problems.filter((p) => p.difficulty === 'Medium').length;
+  const hardCount = problems.filter((p) => p.difficulty === 'Hard').length;
+
+  const sortedProblems = [...problems].sort((a, b) => {
+    if (sortBy === 'acceptance_desc') return b.acceptanceRate - a.acceptanceRate;
+    if (sortBy === 'acceptance_asc') return a.acceptanceRate - b.acceptanceRate;
+    if (sortBy === 'title_asc') return a.title.localeCompare(b.title);
+    return 0;
+  });
+
   return (
     <div className="problems-catalog-container">
       {/* Search and Filters Header */}
@@ -387,6 +399,13 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
             Master foundational and advanced data structures. Test your solutions in real time or
             challenge rivals in 1v1 duels.
           </p>
+
+          <div className="catalog-stats-strip">
+            <span className="stat-pill-total">{problems.length} Challenges</span>
+            <span className="stat-pill-easy">{easyCount} Easy</span>
+            <span className="stat-pill-med">{medCount} Medium</span>
+            <span className="stat-pill-hard">{hardCount} Hard</span>
+          </div>
         </div>
 
         <div className="filter-controls-row">
@@ -411,6 +430,20 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
                 {diff}
               </button>
             ))}
+          </div>
+
+          <div className="sort-dropdown-wrap">
+            <select
+              className="sort-select"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              title="Sort problem catalog"
+            >
+              <option value="default">Default Order</option>
+              <option value="acceptance_desc">Acceptance: High to Low</option>
+              <option value="acceptance_asc">Acceptance: Low to High</option>
+              <option value="title_asc">Title: A to Z</option>
+            </select>
           </div>
         </div>
 
@@ -442,49 +475,61 @@ export const ProblemsView: React.FC<ProblemsViewProps> = ({
         </div>
       ) : (
         <div className="problems-list-grid">
-          {problems.map((problem) => (
-            <div key={problem.id} className="problem-item-card">
-              <div className="problem-top-row">
-                <span className={`diff-pill ${problem.difficulty.toLowerCase()}`}>
-                  {problem.difficulty}
-                </span>
-                <span className="category-pill">{problem.category}</span>
-                <span className="acceptance-rate">
-                  {problem.acceptanceRate}% Acceptance
-                </span>
-              </div>
+          {sortedProblems.map((problem) => {
+            const isSolved = currentUser?.submissions?.some(
+              (s) => s.problemId === problem.id && s.status === 'ACCEPTED'
+            );
 
-              <h3 className="problem-title">{problem.title}</h3>
-              <p className="problem-snippet">
-                {problem.description.slice(0, 140)}...
-              </p>
-
-              <div className="problem-card-footer">
-                <span className="problem-submissions-count">
-                  {problem._count?.submissions ?? 0} Submissions
-                </span>
-                <div className="problem-btn-group">
-                  {onChallengeProblem && (
-                    <button
-                      className="btn-mini-challenge"
-                      onClick={() => onChallengeProblem(problem.id)}
-                      title="Create 1v1 arena match with this problem"
-                    >
-                      <Swords size={14} />
-                      <span>1v1 Duel</span>
-                    </button>
+            return (
+              <div key={problem.id} className="problem-item-card">
+                <div className="problem-top-row">
+                  <span className={`diff-pill ${problem.difficulty.toLowerCase()}`}>
+                    {problem.difficulty}
+                  </span>
+                  <span className="category-pill">{problem.category}</span>
+                  {isSolved && (
+                    <span className="solved-pill">
+                      <CheckCircle2 size={12} />
+                      <span>Solved</span>
+                    </span>
                   )}
-                  <button
-                    className="btn-solve-card"
-                    onClick={() => openStudio(problem)}
-                  >
-                    <Play size={14} />
-                    <span>Solve Studio</span>
-                  </button>
+                  <span className="acceptance-rate">
+                    {problem.acceptanceRate}% Acceptance
+                  </span>
+                </div>
+
+                <h3 className="problem-title">{problem.title}</h3>
+                <p className="problem-snippet">
+                  {problem.description.slice(0, 140)}...
+                </p>
+
+                <div className="problem-card-footer">
+                  <span className="problem-submissions-count">
+                    {problem._count?.submissions ?? 0} Submissions
+                  </span>
+                  <div className="problem-btn-group">
+                    {onChallengeProblem && (
+                      <button
+                        className="btn-mini-challenge"
+                        onClick={() => onChallengeProblem(problem.id)}
+                        title="Create 1v1 arena match with this problem"
+                      >
+                        <Swords size={14} />
+                        <span>1v1 Duel</span>
+                      </button>
+                    )}
+                    <button
+                      className="btn-solve-card"
+                      onClick={() => openStudio(problem)}
+                    >
+                      <Play size={14} />
+                      <span>Solve Studio</span>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

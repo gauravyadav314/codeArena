@@ -16,13 +16,17 @@ import {
   Check,
   ChevronRight,
   ArrowLeft,
-  Bot
+  Bot,
+  Volume2,
+  VolumeX,
+  MessageSquare,
 } from 'lucide-react';
 import type { Match, Problem, User, JudgeVerdict } from '../types';
 import { api } from '../services/api';
 import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
 import { renderMarkdown } from '../utils/markdown';
 import { handleEditorKeyDown } from '../utils/editorUtils';
+import { playSuccessSound, playErrorSound, playVictorySound, playTickSound, soundSettings } from '../utils/sound';
 import { useToast } from './Toast';
 
 interface ArenaBattleViewProps {
@@ -60,6 +64,9 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   const [matchEvents, setMatchEvents] = useState<string[]>([]);
   const [timeLeft, setTimeLeft] = useState<number>(900);
   const [victoryModalOpen, setVictoryModalOpen] = useState<boolean>(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(soundSettings.isEnabled());
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; username: string; text: string; timestamp: string }>>([]);
+  const [chatInput, setChatInput] = useState<string>('');
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -147,6 +154,9 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     if (selectedMatch && selectedMatch.status === 'IN_PROGRESS') {
       timerRef.current = setInterval(() => {
         setTimeLeft((prev) => {
+          if (prev <= 10 && prev > 1) {
+            playTickSound();
+          }
           if (prev <= 1) {
             if (timerRef.current) clearInterval(timerRef.current);
             if (selectedMatch.status === 'IN_PROGRESS') {
@@ -173,18 +183,33 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     };
   }, [selectedMatch?.code, selectedMatch?.status, showToast]);
 
-  // Poll match status every 3 seconds to detect opponent joining or match completion
+  // Polling loop for opponent status, match outcome, and battle chat
   useEffect(() => {
-    if (!selectedMatch || selectedMatch.status === 'COMPLETED') {
+    if (!selectedMatch) return;
+
+    // Fetch initial chat
+    api.getMatchMessages(selectedMatch.code)
+      .then((res) => { if (res.success) setChatMessages(res.data); })
+      .catch(() => {});
+
+    if (selectedMatch.status === 'COMPLETED') {
       if (pollRef.current) clearInterval(pollRef.current);
       return;
     }
 
     pollRef.current = setInterval(async () => {
       try {
-        const res = await api.getMatch(selectedMatch.code);
-        if (res.success) {
-          const updated = res.data;
+        const [matchRes, chatRes] = await Promise.all([
+          api.getMatch(selectedMatch.code),
+          api.getMatchMessages(selectedMatch.code),
+        ]);
+
+        if (chatRes.success) {
+          setChatMessages(chatRes.data);
+        }
+
+        if (matchRes.success) {
+          const updated = matchRes.data;
           setSelectedMatch((prev) => {
             if (!prev) return updated;
             // Detect opponent just joined
@@ -196,6 +221,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
             }
             // Detect match completed by opponent
             if (prev.status !== 'COMPLETED' && updated.status === 'COMPLETED') {
+              playVictorySound();
               setVictoryModalOpen(true);
               setMatchEvents((evts) => [
                 ...evts,
@@ -216,6 +242,29 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [selectedMatch?.code, selectedMatch?.status]);
+
+  const handleSendMessage = async (customText?: string) => {
+    const textToSend = (customText || chatInput).trim();
+    if (!textToSend || !selectedMatch || !currentUser) return;
+    try {
+      const res = await api.sendMatchMessage(selectedMatch.code, {
+        username: currentUser.username,
+        text: textToSend,
+      });
+      if (res.success) {
+        setChatMessages(res.messages);
+        if (!customText) setChatInput('');
+      }
+    } catch {
+      showToast('Could not deliver arena message', 'error');
+    }
+  };
+
+  const handleToggleSound = () => {
+    const next = soundSettings.toggle();
+    setSoundEnabled(next);
+    showToast(next ? 'Sound effects enabled' : 'Sound effects muted', 'info');
+  };
 
   // Host new match
   const handleCreateMatch = async (e: React.FormEvent) => {
@@ -323,12 +372,18 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       if (res.success) {
         setVerdict(res.verdict);
         setSelectedTestCaseIndex(0);
+        if (res.verdict.status === 'ACCEPTED') {
+          playSuccessSound();
+        } else {
+          playErrorSound();
+        }
         setMatchEvents((prev) => [
           ...prev,
           `Ran tests: ${res.verdict.passedCount}/${res.verdict.totalCount} passed in ${res.verdict.runtimeMs}ms.`,
         ]);
       }
     } catch (err) {
+      playErrorSound();
       console.error(err);
     } finally {
       setRunningTests(false);
@@ -361,6 +416,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
         });
 
         if (res.verdict.status === 'ACCEPTED') {
+          playVictorySound();
           setVictoryModalOpen(true);
           setMatchEvents((prev) => [
             ...prev,
@@ -369,6 +425,7 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
           showToast('Accepted! Victory claimed!', 'success');
           onRefreshUsers();
         } else {
+          playErrorSound();
           setMatchEvents((prev) => [
             ...prev,
             `Submission: ${res.verdict.status} (${res.verdict.passedCount}/${res.verdict.totalCount} tests passed)`,
@@ -689,6 +746,15 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
         </div>
 
         <div className="live-nav-right">
+          <button
+            className="btn-sound-toggle"
+            onClick={handleToggleSound}
+            title={soundEnabled ? 'Mute Arena Sounds' : 'Enable Arena Sounds'}
+            aria-label="Toggle sound effects"
+          >
+            {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          </button>
+
           {!opponentPlayer && selectedMatch.status === 'WAITING' && (
             <button
               className="btn-bot-challenge"
@@ -802,6 +868,61 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                     <span>{evt}</span>
                   </div>
                 ))}
+              </div>
+
+              {/* Match Chat & Battle Reactions */}
+              <div className="arena-chat-section">
+                <div className="chat-section-header">
+                  <MessageSquare size={13} className="text-cyan" />
+                  <span>Battle Taunts &amp; Chat</span>
+                </div>
+
+                <div className="quick-reactions-row">
+                  {['⚡ Good luck!', '🔥 Running tests...', '🧠 Thinking...', '🤝 GG!'].map((taunt) => (
+                    <button
+                      key={taunt}
+                      type="button"
+                      className="btn-taunt-pill"
+                      onClick={() => handleSendMessage(taunt)}
+                    >
+                      {taunt}
+                    </button>
+                  ))}
+                </div>
+
+                {chatMessages.length > 0 && (
+                  <div className="chat-messages-container">
+                    {chatMessages.slice(-6).map((msg) => {
+                      const isMe = msg.username === currentUser?.username;
+                      return (
+                        <div key={msg.id} className={`chat-bubble ${isMe ? 'chat-me' : 'chat-opponent'}`}>
+                          <span className="chat-sender">{isMe ? 'You' : `@${msg.username}`}:</span>
+                          <span className="chat-body">{msg.text}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <form
+                  className="chat-input-row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }}
+                >
+                  <input
+                    type="text"
+                    className="chat-input-field"
+                    placeholder="Send arena reaction..."
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    maxLength={140}
+                  />
+                  <button type="submit" className="btn-send-chat" disabled={!chatInput.trim()}>
+                    Send
+                  </button>
+                </form>
               </div>
             </div>
           </div>

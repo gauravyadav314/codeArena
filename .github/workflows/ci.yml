@@ -39,6 +39,9 @@ jobs:
       - name: Build backend TypeScript
         run: npm run build
 
+      - name: Run backend unit tests
+        run: npm test
+
   frontend-check:
     name: Frontend Build & Type Check
     runs-on: ubuntu-latest
@@ -61,3 +64,4 @@ jobs:
 
       - name: Build frontend Vite application
         run: npm run build
+

@@ -393,4 +393,51 @@ router.post('/:code/draw', async (req: Request, res: Response, next: NextFunctio
   }
 });
 
+// In-memory real-time match room messages and battle reactions
+interface MatchMessage {
+  id: string;
+  username: string;
+  text: string;
+  timestamp: string;
+}
+const matchMessages = new Map<string, MatchMessage[]>();
+
+// GET /api/matches/:code/messages - Retrieve live messages for match
+router.get('/:code/messages', async (req: Request, res: Response) => {
+  const { code } = req.params;
+  const list = matchMessages.get(code) || [];
+  res.status(200).json({ success: true, data: list });
+});
+
+// POST /api/matches/:code/messages - Send a message or quick reaction
+router.post('/:code/messages', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { code } = req.params;
+    const { username, text } = req.body;
+
+    if (!username || !text || typeof text !== 'string' || text.trim().length === 0) {
+      res.status(400).json({ success: false, message: 'username and non-empty text required' });
+      return;
+    }
+
+    const cleanText = text.trim().slice(0, 200); // Max 200 chars
+    const msg: MatchMessage = {
+      id: Math.random().toString(36).substring(2, 9),
+      username,
+      text: cleanText,
+      timestamp: new Date().toISOString(),
+    };
+
+    const currentList = matchMessages.get(code) || [];
+    currentList.push(msg);
+    // Keep max 50 recent messages per room
+    if (currentList.length > 50) currentList.shift();
+    matchMessages.set(code, currentList);
+
+    res.status(201).json({ success: true, data: msg, messages: currentList });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export const matchRoutes = router;

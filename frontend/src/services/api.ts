@@ -152,4 +152,25 @@ export const api = {
       method: 'POST',
     });
   },
+
+  async getMatchMessages(code: string): Promise<{
+    success: boolean;
+    data: Array<{ id: string; username: string; text: string; timestamp: string }>;
+  }> {
+    return request(`/api/matches/${encodeURIComponent(code)}/messages`);
+  },
+
+  async sendMatchMessage(
+    code: string,
+    payload: { username: string; text: string }
+  ): Promise<{
+    success: boolean;
+    data: { id: string; username: string; text: string; timestamp: string };
+    messages: Array<{ id: string; username: string; text: string; timestamp: string }>;
+  }> {
+    return request(`/api/matches/${encodeURIComponent(code)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
 };
