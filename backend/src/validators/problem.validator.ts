@@ -22,3 +22,4 @@ export const submitProblemCodeSchema = z.object({
   language: z.enum(['javascript', 'typescript', 'python', 'cpp', 'java']),
   username: z.string().trim().min(1).optional(),
 });
+

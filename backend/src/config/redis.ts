@@ -49,3 +49,4 @@ export function getRedisClient(): Redis | null {
 export function isRedisConnected(): boolean {
   return isRedisAvailable && redisClient?.status === 'ready';
 }
+

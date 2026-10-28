@@ -28,3 +28,4 @@ export const matchMessageSchema = z.object({
   senderUsername: z.string().trim().min(1, 'Sender username is required'),
   text: z.string().trim().min(1, 'Message text cannot be empty').max(500, 'Message cannot exceed 500 characters'),
 });
+

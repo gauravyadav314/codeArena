@@ -14,3 +14,4 @@ export const syncProfileSchema = z.object({
   codeforcesRating: z.number().int().min(0).max(4000).optional(),
   codechefRating: z.number().int().min(0).max(4000).optional(),
 });
+

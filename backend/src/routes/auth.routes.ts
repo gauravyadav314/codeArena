@@ -137,3 +137,4 @@ router.get('/me', requireAuth, async (req: Request, res: Response, next: NextFun
 });
 
 export const authRoutes = router;
+

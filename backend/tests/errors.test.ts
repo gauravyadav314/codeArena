@@ -68,3 +68,4 @@ test('Matchmaking Queue - Tolerance Window Widening', async (t) => {
     assert.equal(getRatingTolerance(60), 500);
   });
 });
+

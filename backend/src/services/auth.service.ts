@@ -227,3 +227,4 @@ export async function getCurrentUser(userId: string): Promise<any> {
   const { passwordHash: _, refreshTokenHash: __, ...safeUser } = user;
   return safeUser;
 }
+

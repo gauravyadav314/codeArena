@@ -235,3 +235,4 @@ model RatingHistory {
 
   @@index([userId, createdAt(sort: Desc)])
 }
+
