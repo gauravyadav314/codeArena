@@ -22,6 +22,7 @@ import type { Match, Problem, User, JudgeVerdict } from '../types';
 import { api } from '../services/api';
 import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
 import { renderMarkdown } from '../utils/markdown';
+import { handleEditorKeyDown } from '../utils/editorUtils';
 import { useToast } from './Toast';
 
 interface ArenaBattleViewProps {
@@ -857,9 +858,10 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
                 className="code-textarea"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
+                onKeyDown={(e) => handleEditorKeyDown(e, code, setCode, handleRunTests, handleSubmitCode)}
                 spellCheck={false}
                 rows={18}
-                placeholder="Write your solution here..."
+                placeholder="Write your solution here... (Ctrl+Enter to run, Ctrl+Shift+Enter to submit)"
               />
             </div>
 

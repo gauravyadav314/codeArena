@@ -143,18 +143,45 @@ VITE_API_BASE_URL=http://localhost:5001
 |---|---|---|
 | `GET` | `/api/health` | System health probe, uptime, and environment |
 | `GET` | `/api/problems` | List problems with filters (`difficulty`, `category`, `search`) |
-| `GET` | `/api/problems/:id` | Fetch problem description, starter code, and test cases |
+| `GET` | `/api/problems/:slug` | Fetch problem description, starter code, and test cases |
+| `POST` | `/api/problems/:slug/run` | Execute code against problem test cases in safe VM |
+| `POST` | `/api/problems/:slug/submit` | Standalone practice submission tracking |
 | `GET` | `/api/users` | Retrieve leaderboard and ranked competitors |
 | `GET` | `/api/users/:username`| Fetch individual user profile and rating history |
-| `POST` | `/api/matches` | Create a new 1v1 match lobby |
+| `POST` | `/api/users/register` | Register new user handle and initialize profile |
+| `POST` | `/api/users/sync-profile` | Synchronize LeetCode, Codeforces & CodeChef ratings |
+| `GET` | `/api/matches` | List active, waiting, and completed 1v1 arenas |
+| `POST` | `/api/matches/create` | Create a new 1v1 duel room |
 | `POST` | `/api/matches/:code/join` | Join an existing duel by match code |
-| `POST` | `/api/matches/:code/submit` | Submit code for sandboxed execution against test cases |
+| `POST` | `/api/matches/:code/submit` | Submit code for sandboxed execution against test cases with ELO update |
+| `POST` | `/api/matches/:code/draw` | Mark match as Draw upon timeout expiration |
+
+---
+
+## ⌨️ Code Editor Ergonomics & Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Tab` | Inserts 2 spaces without losing editor focus |
+| `Ctrl+Enter` / `Cmd+Enter` | Run test cases against sandboxed runner |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Submit official solution |
+
+---
+
+## 🐳 Docker Quickstart
+
+```bash
+# Build and run the entire stack (Backend on port 5001, Frontend on port 5173)
+docker compose up --build
+```
 
 ---
 
 ## 🛡️ Key Features
 
-- **1v1 Arena Battles**: Live match lobby, timed duel timer, code editor with syntax styles, and instant feedback.
-- **Sandboxed Test Runner**: Evaluates submissions against test cases safely with timeout handling.
-- **Competitive Rating Engine**: Elo-based rating updates, winning streaks, and tier badges.
+- **1v1 Arena Battles**: Live match lobby, timed duel timer, live opponent polling, code editor with syntax styles, and instant feedback.
+- **True ELO Rating Engine ($K=32$)**: Winner gains rating, loser is penalized, streaks update, and tiers adjust dynamically.
+- **Multi-Language Sandboxed Judge**: Evaluates JavaScript, TypeScript, Python 3, and C++ with strict timeouts and memory isolation.
+- **Problem Bank**: 8 algorithmic problems covering Dynamic Programming, Arrays, Stack, Sliding Window, Two Pointers, and Linked Lists.
+- **Toast Notifications & Error Boundaries**: Non-blocking alert banners and graceful UI error recovery.
 - **Dynamic Diagnostics**: Live health probe and latency counter communicating with the backend.
