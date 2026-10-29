@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar, type TabType } from './components/Navbar';
 import { ArenaBattleView } from './components/ArenaBattleView';
 import { ProblemsView } from './components/ProblemsView';
 import { LeaderboardView } from './components/LeaderboardView';
 import { ProfileView } from './components/ProfileView';
 import { TelemetryView } from './components/TelemetryView';
+import { NotFoundView } from './components/NotFoundView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { HealthResponse } from './components/HealthProbeCard';
 import type { User } from './types';
@@ -12,9 +14,35 @@ import { api } from './services/api';
 import './App.css';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('arena');
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Determine active tab from URL path
+  const getTabFromPath = (pathname: string): TabType => {
+    if (pathname.startsWith('/problems')) return 'problems';
+    if (pathname.startsWith('/leaderboard')) return 'leaderboard';
+    if (pathname.startsWith('/profile')) return 'profile';
+    if (pathname.startsWith('/telemetry')) return 'telemetry';
+    return 'arena';
+  };
+
+  const [activeTab, setActiveTab] = useState<TabType>(() => getTabFromPath(location.pathname));
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    setActiveTab(getTabFromPath(location.pathname));
+  }, [location.pathname]);
+
+  // Handle tab switching via React Router
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    if (tab === 'arena') navigate('/arena');
+    else if (tab === 'problems') navigate('/problems');
+    else if (tab === 'leaderboard') navigate('/leaderboard');
+    else if (tab === 'profile') navigate('/profile');
+    else if (tab === 'telemetry') navigate('/telemetry');
+  };
 
   // Theme state: dark / light
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -82,7 +110,6 @@ export function App() {
         setUsers(res.data);
         setCurrentUser((prev) => {
           if (!prev) return res.data[0];
-          // Keep current user updated with latest rating/streak
           const found = res.data.find((u) => u.id === prev.id);
           return found || res.data[0];
         });
@@ -100,7 +127,6 @@ export function App() {
   const handleChallengeUser = async (targetUsername: string) => {
     if (!currentUser) return;
     try {
-      // Create match and join target user as opponent
       const matchRes = await api.createMatch({
         player1Username: currentUser.username,
         durationSeconds: 900,
@@ -108,26 +134,28 @@ export function App() {
 
       if (matchRes.success) {
         await api.joinMatch(matchRes.data.code, targetUsername);
-        setActiveTab('arena');
+        navigate(`/arena/${matchRes.data.code}`);
       }
     } catch (err) {
       console.error('Challenge failed:', err);
-      setActiveTab('arena');
+      navigate('/arena');
     }
   };
 
   const handleChallengeProblem = async (problemId: string) => {
     if (!currentUser) return;
     try {
-      await api.createMatch({
+      const matchRes = await api.createMatch({
         problemId,
         player1Username: currentUser.username,
         durationSeconds: 900,
       });
-      setActiveTab('arena');
+      if (matchRes.success) {
+        navigate(`/arena/${matchRes.data.code}`);
+      }
     } catch (err) {
       console.error('Problem duel match creation failed:', err);
-      setActiveTab('arena');
+      navigate('/arena');
     }
   };
 
@@ -141,7 +169,7 @@ export function App() {
     <div className="app-container">
       <Navbar
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
         currentUser={currentUser}
         users={users}
         onSelectUser={setCurrentUser}
@@ -153,60 +181,111 @@ export function App() {
 
       <main className="main-content">
         <ErrorBoundary>
-          {activeTab === 'arena' && (
-            <ArenaBattleView
-              currentUser={currentUser}
-              users={users}
-              onRefreshUsers={fetchUsers}
+          <Routes>
+            <Route path="/" element={<Navigate to="/arena" replace />} />
+            
+            <Route
+              path="/arena"
+              element={
+                <ArenaBattleView
+                  currentUser={currentUser}
+                  users={users}
+                  onRefreshUsers={fetchUsers}
+                  theme={theme}
+                />
+              }
             />
-          )}
+            <Route
+              path="/arena/:code"
+              element={
+                <ArenaBattleView
+                  currentUser={currentUser}
+                  users={users}
+                  onRefreshUsers={fetchUsers}
+                  theme={theme}
+                />
+              }
+            />
 
-          {activeTab === 'problems' && (
-            <ProblemsView
-              onChallengeProblem={handleChallengeProblem}
-              currentUser={currentUser}
+            <Route
+              path="/problems"
+              element={
+                <ProblemsView
+                  onChallengeProblem={handleChallengeProblem}
+                  currentUser={currentUser}
+                  theme={theme}
+                />
+              }
             />
-          )}
+            <Route
+              path="/problems/:slug"
+              element={
+                <ProblemsView
+                  onChallengeProblem={handleChallengeProblem}
+                  currentUser={currentUser}
+                  theme={theme}
+                />
+              }
+            />
 
-          {activeTab === 'leaderboard' && (
-            <LeaderboardView
-              currentUser={currentUser}
-              onChallengeUser={handleChallengeUser}
+            <Route
+              path="/leaderboard"
+              element={
+                <LeaderboardView
+                  currentUser={currentUser}
+                  onChallengeUser={handleChallengeUser}
+                />
+              }
             />
-          )}
 
-          {activeTab === 'profile' && (
-            <ProfileView
-              currentUser={currentUser}
-              onProfileUpdated={fetchUsers}
+            <Route
+              path="/profile"
+              element={
+                <ProfileView
+                  currentUser={currentUser}
+                  onProfileUpdated={fetchUsers}
+                />
+              }
             />
-          )}
+            <Route
+              path="/profile/:username"
+              element={
+                <ProfileView
+                  currentUser={currentUser}
+                  onProfileUpdated={fetchUsers}
+                />
+              }
+            />
 
-          {activeTab === 'telemetry' && (
-            <TelemetryView
-              healthData={healthData}
-              loading={loading}
-              error={error}
-              latency={latency}
-              onRefresh={checkHealth}
-              apiUrl={apiUrl}
+            <Route
+              path="/telemetry"
+              element={
+                <TelemetryView
+                  healthData={healthData}
+                  loading={loading}
+                  error={error}
+                  latency={latency}
+                  onRefresh={checkHealth}
+                  apiUrl={apiUrl}
+                />
+              }
             />
-          )}
+
+            <Route path="*" element={<NotFoundView />} />
+          </Routes>
         </ErrorBoundary>
       </main>
 
-      <footer className="footer">
-        <div className="footer-content">
-          <p>© {new Date().getFullYear()} CodeArena. Unified Competitive Coding &amp; Real-Time Arena.</p>
-          <div className="footer-links">
-            <span className="footer-tag">Frontend: Vite + React 19</span>
-            <span className="footer-separator">•</span>
-            <span className="footer-tag">Backend: Express + Node VM</span>
-            <span className="footer-separator">•</span>
-            <span className="footer-tag">Database: Prisma SQLite</span>
-            <span className="footer-separator">•</span>
-            <span className="footer-tag">Sandboxed Evaluator</span>
-          </div>
+      {/* Global Status Bar */}
+      <footer className="footer-status-bar">
+        <div className="footer-status-left">
+          <span className="dot-pulse" />
+          <span>System Status: <strong>{backendStatus.toUpperCase()}</strong></span>
+          {latency !== null && <span className="footer-pipe">•</span>}
+          {latency !== null && <span>API Latency: <strong>{latency}ms</strong></span>}
+        </div>
+        <div className="footer-status-right">
+          <span>CodeArena Engine v2.0 • Real-Time 1v1 Algorithmic Battleground</span>
         </div>
       </footer>
     </div>

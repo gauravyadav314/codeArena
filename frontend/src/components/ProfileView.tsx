@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   Trophy,
   Flame,
   Swords,
   RefreshCw,
-  Code2,
   CheckCircle2,
   XCircle,
-  Clock,
-  Shield,
+  Award,
 } from 'lucide-react';
 import type { User, Submission } from '../types';
 import { api } from '../services/api';
 import { useToast } from './Toast';
+import { SkeletonLoader } from './SkeletonLoader';
+import { EmptyState } from './EmptyState';
 
 interface ProfileViewProps {
   currentUser: User | null;
@@ -23,6 +24,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   currentUser,
   onProfileUpdated,
 }) => {
+  const { username: routeUsername } = useParams<{ username?: string }>();
   const { showToast } = useToast();
   const [profileUser, setProfileUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -38,11 +40,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [ccHandle, setCcHandle] = useState<string>('');
   const [ccRating, setCcRating] = useState<number>(2120);
 
+  const targetUsername = routeUsername || currentUser?.username;
+
   const fetchFullProfile = async () => {
-    if (!currentUser) return;
+    if (!targetUsername) return;
     setLoading(true);
     try {
-      const res = await api.getUser(currentUser.username);
+      const res = await api.getUser(targetUsername);
       if (res.success) {
         setProfileUser(res.data);
         const p = res.data.profile;
@@ -65,32 +69,34 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   useEffect(() => {
     fetchFullProfile();
-  }, [currentUser]);
+  }, [targetUsername]);
 
   const handleSyncSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileUser) return;
     setSyncing(true);
+
     try {
       const res = await api.syncProfile({
         username: profileUser.username,
-        leetcodeUsername: lcUsername,
-        leetcodeRating: Number(lcRating),
-        leetcodeSolved: Number(lcSolved),
-        codeforcesHandle: cfHandle,
-        codeforcesRating: Number(cfRating),
-        codechefHandle: ccHandle,
-        codechefRating: Number(ccRating),
+        leetcodeUsername: lcUsername || undefined,
+        codeforcesHandle: cfHandle || undefined,
+        codechefHandle: ccHandle || undefined,
+        leetcodeRating: lcRating,
+        leetcodeSolved: lcSolved,
+        codeforcesRating: cfRating,
+        codechefRating: ccRating,
       });
 
       if (res.success) {
+        setProfileUser(res.data);
         setShowSyncModal(false);
-        await fetchFullProfile();
+        showToast('Ratings synchronized from LeetCode, Codeforces & CodeChef!', 'success');
         onProfileUpdated();
-        showToast('Ratings and profiles synchronized!', 'success');
       }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Sync failed', 'error');
+    } catch (err: any) {
+      console.error('Sync failed:', err);
+      showToast(err.message || 'Failed to sync platform handles', 'error');
     } finally {
       setSyncing(false);
     }
@@ -98,376 +104,277 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   if (loading && !profileUser) {
     return (
-      <div className="profile-loading-state">
-        <div className="loading-spinner" />
-        <span>Synthesizing competitive programming metrics...</span>
+      <div className="profile-container" style={{ padding: '2rem' }}>
+        <SkeletonLoader type="card" rows={3} />
       </div>
     );
   }
 
-  const u = profileUser || currentUser;
-  if (!u) {
-    return <div className="empty-state">No user profile selected.</div>;
+  if (!profileUser) {
+    return (
+      <div className="profile-container">
+        <EmptyState
+          title="No profile selected"
+          description="Select an account from the header dropdown or register a new handle to view statistics."
+        />
+      </div>
+    );
   }
 
-  const p = u.profile;
-  const totalMatches = u.wins + u.losses + u.draws;
-  const winRate = totalMatches > 0 ? Math.round((u.wins / totalMatches) * 100) : 0;
+  const profile = profileUser.profile;
+  const totalMatches = profileUser.wins + profileUser.losses + profileUser.draws;
+  const winRate = totalMatches > 0 ? Math.round((profileUser.wins / totalMatches) * 100) : 0;
+  const isOwner = currentUser?.id === profileUser.id;
 
   return (
-    <div className="profile-page-container">
-      {/* Top Banner & Header Card */}
+    <div className="profile-container">
+      {/* Profile Header Hero */}
       <div className="profile-hero-card">
-        <div className="profile-avatar-wrap">
-          {u.avatarUrl ? (
-            <img src={u.avatarUrl} alt={u.username} className="profile-avatar-large" />
-          ) : (
-            <div className="profile-avatar-fallback">{u.username[0]?.toUpperCase()}</div>
+        <div className="profile-hero-left">
+          <div className="profile-avatar-large">
+            {profileUser.avatarUrl ? (
+              <img src={profileUser.avatarUrl} alt={profileUser.username} />
+            ) : (
+              <div className="avatar-placeholder-large">
+                {profileUser.username.charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+
+          <div className="profile-hero-info">
+            <div className="profile-title-row">
+              <h2>{profileUser.name || profileUser.username}</h2>
+              <span className={`tier-badge tier-${profileUser.ratingTier.toLowerCase()}`}>
+                {profileUser.ratingTier}
+              </span>
+            </div>
+            <p className="profile-handle">@{profileUser.username}</p>
+            {profileUser.bio && <p className="profile-bio">{profileUser.bio}</p>}
+          </div>
+        </div>
+
+        <div className="profile-hero-actions">
+          {isOwner && (
+            <button className="btn-sync-profile" onClick={() => setShowSyncModal(true)}>
+              <RefreshCw size={15} />
+              <span>Sync Platform Handles</span>
+            </button>
           )}
-          <div className="avatar-rank-halo" />
-        </div>
-
-        <div className="profile-primary-details">
-          <div className="profile-name-row">
-            <h1 className="profile-name">{u.name || u.username}</h1>
-            <span className={`tier-badge ${u.ratingTier.toLowerCase().replace(/\s+/g, '-')}`}>
-              {u.ratingTier}
-            </span>
-          </div>
-          <span className="profile-handle">@{u.username} • Joined 2026</span>
-          <p className="profile-bio">
-            {u.bio || 'Full-Stack Developer & Algorithmic Duelist on CodeArena.'}
-          </p>
-
-          <div className="profile-metrics-row">
-            <div className="metric-badge">
-              <Trophy size={16} className="text-amber" />
-              <span>{u.arenaRating} Arena ELO</span>
-            </div>
-            <div className="metric-badge">
-              <Swords size={16} className="text-rose" />
-              <span>{u.wins}W - {u.losses}L ({winRate}% Win Rate)</span>
-            </div>
-            <div className="metric-badge">
-              <Flame size={16} className="text-amber" />
-              <span>{u.streak} Win Streak</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="profile-hero-action">
-          <button className="btn-sync-platforms" onClick={() => setShowSyncModal(true)}>
-            <RefreshCw size={16} />
-            <span>Sync Platform Ratings</span>
-          </button>
         </div>
       </div>
 
-      {/* Multi-Platform Aggregated Matrix */}
-      <div className="profile-platform-matrix">
-        {/* LeetCode Card */}
-        <div className="platform-card leetcode-card">
-          <div className="card-top">
-            <div className="platform-brand">
-              <span className="brand-dot lc-dot" />
-              <span className="brand-title">LeetCode</span>
-            </div>
-            <span className="handle-tag">@{p?.leetcodeUsername || 'not_connected'}</span>
+      {/* Main Stats Grid */}
+      <div className="profile-stats-grid">
+        <div className="stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">CodeArena ELO</span>
+            <Trophy size={18} className="text-amber" />
           </div>
+          <div className="stat-value">{profileUser.arenaRating}</div>
+          <div className="stat-subtext">Tier: {profileUser.ratingTier}</div>
+        </div>
 
-          <div className="card-rating-section">
-            <span className="platform-rating-val">{p?.leetcodeRating || 0}</span>
-            <span className="platform-rating-lbl">Contest Rating</span>
+        <div className="stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Win Rate</span>
+            <Swords size={18} className="text-emerald" />
           </div>
-
-          <div className="solved-progress-section">
-            <div className="solved-total-row">
-              <span>Solved Problems</span>
-              <span className="solved-num">{p?.leetcodeSolved || 0}</span>
-            </div>
-
-            <div className="breakdown-bars">
-              <div className="bar-item">
-                <div className="bar-labels">
-                  <span className="easy-lbl">Easy</span>
-                  <span>{p?.leetcodeEasy || 280}</span>
-                </div>
-                <div className="progress-bg">
-                  <div className="progress-fill easy" style={{ width: '65%' }} />
-                </div>
-              </div>
-
-              <div className="bar-item">
-                <div className="bar-labels">
-                  <span className="med-lbl">Medium</span>
-                  <span>{p?.leetcodeMedium || 372}</span>
-                </div>
-                <div className="progress-bg">
-                  <div className="progress-fill medium" style={{ width: '75%' }} />
-                </div>
-              </div>
-
-              <div className="bar-item">
-                <div className="bar-labels">
-                  <span className="hard-lbl">Hard</span>
-                  <span>{p?.leetcodeHard || 90}</span>
-                </div>
-                <div className="progress-bg">
-                  <div className="progress-fill hard" style={{ width: '40%' }} />
-                </div>
-              </div>
-            </div>
+          <div className="stat-value">{winRate}%</div>
+          <div className="stat-subtext">
+            {profileUser.wins}W • {profileUser.losses}L • {profileUser.draws}D
           </div>
         </div>
 
-        {/* Codeforces Card */}
-        <div className="platform-card codeforces-card">
-          <div className="card-top">
-            <div className="platform-brand">
-              <span className="brand-dot cf-dot" />
-              <span className="brand-title">Codeforces</span>
-            </div>
-            <span className="handle-tag">@{p?.codeforcesHandle || 'not_connected'}</span>
+        <div className="stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Win Streak</span>
+            <Flame size={18} className="text-amber" />
           </div>
-
-          <div className="card-rating-section">
-            <span className="platform-rating-val text-cyan">{p?.codeforcesRating || 0}</span>
-            <span className="platform-rating-lbl">Division Rating</span>
-          </div>
-
-          <div className="cf-stats-box">
-            <div className="cf-stat-row">
-              <span className="cf-stat-name">Official Rank</span>
-              <span className="cf-stat-val">{p?.codeforcesRank || 'Candidate Master'}</span>
-            </div>
-            <div className="cf-stat-row">
-              <span className="cf-stat-name">Peak Rating</span>
-              <span className="cf-stat-val">{p?.codeforcesMaxRating || p?.codeforcesRating || 0}</span>
-            </div>
-            <div className="cf-stat-row">
-              <span className="cf-stat-name">Verification</span>
-              <span className="cf-stat-val text-emerald">Verified API</span>
-            </div>
-          </div>
+          <div className="stat-value">{profileUser.streak}</div>
+          <div className="stat-subtext">Consecutive 1v1 victories</div>
         </div>
 
-        {/* CodeChef Card */}
-        <div className="platform-card codechef-card">
-          <div className="card-top">
-            <div className="platform-brand">
-              <span className="brand-dot cc-dot" />
-              <span className="brand-title">CodeChef</span>
-            </div>
-            <span className="handle-tag">@{p?.codechefHandle || 'not_connected'}</span>
+        <div className="stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Composite CP Score</span>
+            <Award size={18} className="text-indigo" />
           </div>
-
-          <div className="card-rating-section">
-            <span className="platform-rating-val text-amber">{p?.codechefRating || 0}</span>
-            <span className="platform-rating-lbl">Contest Rating</span>
-          </div>
-
-          <div className="cf-stats-box">
-            <div className="cf-stat-row">
-              <span className="cf-stat-name">Stars Tier</span>
-              <span className="cf-stat-val text-amber font-bold">{p?.codechefStars || '5★'}</span>
-            </div>
-            <div className="cf-stat-row">
-              <span className="cf-stat-name">League Status</span>
-              <span className="cf-stat-val">Division 1 Active</span>
-            </div>
-            <div className="cf-stat-row">
-              <span className="cf-stat-name">Status</span>
-              <span className="cf-stat-val text-emerald">Synced</span>
-            </div>
-          </div>
+          <div className="stat-value">{profile?.compositeScore || profileUser.arenaRating}</div>
+          <div className="stat-subtext">Aggregated across platforms</div>
         </div>
       </div>
 
-      {/* Unified Composite Rating Explainer Box */}
-      <div className="composite-explainer-card">
-        <div className="explainer-left">
-          <div className="explainer-icon-circle">
-            <Shield size={24} className="text-cyan" />
+      {/* External Platform Cards */}
+      <h3 className="section-title">Connected Competitive Platforms</h3>
+      <div className="platform-cards-grid">
+        {/* LeetCode */}
+        <div className="platform-card platform-leetcode">
+          <div className="platform-header">
+            <div className="platform-brand">
+              <span className="platform-logo-box lc">LC</span>
+              <div>
+                <h4>LeetCode</h4>
+                <span className="platform-handle">
+                  {profile?.leetcodeUsername ? `@${profile.leetcodeUsername}` : 'Not linked'}
+                </span>
+              </div>
+            </div>
+            <span className="platform-rating-pill">{profile?.leetcodeRating || 0} ELO</span>
           </div>
-          <div>
-            <h3>Unified Cross-Platform Composite Score: {p?.compositeScore || u.arenaRating}</h3>
-            <p>
-              Calculated using weighted platform normalization formula:
-              <code> Score = (LeetCode × 0.45) + (Codeforces × 0.35) + (CodeChef × 0.20)</code>
-            </p>
+          <div className="platform-body">
+            <div className="platform-stat-row">
+              <span>Problems Solved</span>
+              <strong>{profile?.leetcodeSolved || 0}</strong>
+            </div>
+            <div className="platform-stat-row">
+              <span>Contest Rating</span>
+              <strong>{profile?.leetcodeRating || 0}</strong>
+            </div>
           </div>
         </div>
 
-        <div className="tier-progress-preview">
-          <div className="tier-label-row">
-            <span>Current Tier: <strong>{u.ratingTier}</strong></span>
-            <span>Next: <strong>Legendary (2400)</strong></span>
+        {/* Codeforces */}
+        <div className="platform-card platform-codeforces">
+          <div className="platform-header">
+            <div className="platform-brand">
+              <span className="platform-logo-box cf">CF</span>
+              <div>
+                <h4>Codeforces</h4>
+                <span className="platform-handle">
+                  {profile?.codeforcesHandle ? `@${profile.codeforcesHandle}` : 'Not linked'}
+                </span>
+              </div>
+            </div>
+            <span className="platform-rating-pill">{profile?.codeforcesRating || 0} ELO</span>
           </div>
-          <div className="progress-bg">
-            <div
-              className="progress-fill composite"
-              style={{ width: `${Math.min(100, Math.round(((u.arenaRating - 1200) / 1200) * 100))}%` }}
-            />
+          <div className="platform-body">
+            <div className="platform-stat-row">
+              <span>Contest Rank</span>
+              <strong>{profile?.codeforcesRank || 'Unranked'}</strong>
+            </div>
+            <div className="platform-stat-row">
+              <span>Max Rating</span>
+              <strong>{profile?.codeforcesMaxRating || profile?.codeforcesRating || 0}</strong>
+            </div>
+          </div>
+        </div>
+
+        {/* CodeChef */}
+        <div className="platform-card platform-codechef">
+          <div className="platform-header">
+            <div className="platform-brand">
+              <span className="platform-logo-box cc">CC</span>
+              <div>
+                <h4>CodeChef</h4>
+                <span className="platform-handle">
+                  {profile?.codechefHandle ? `@${profile.codechefHandle}` : 'Not linked'}
+                </span>
+              </div>
+            </div>
+            <span className="platform-rating-pill">{profile?.codechefRating || 0} ELO</span>
+          </div>
+          <div className="platform-body">
+            <div className="platform-stat-row">
+              <span>Stars Badge</span>
+              <strong>{profile?.codechefStars || '3★'}</strong>
+            </div>
+            <div className="platform-stat-row">
+              <span>Global Rating</span>
+              <strong>{profile?.codechefRating || 0}</strong>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Recent Submissions History */}
-      <div className="submissions-history-section">
-        <div className="section-header-row">
-          <div>
-            <h2>Recent Solved Arena Submissions</h2>
-            <p>Your latest evaluated algorithmic solutions across all matches and practice sessions</p>
-          </div>
-        </div>
-
-        {u.submissions && u.submissions.length > 0 ? (
-          <div className="submissions-table-wrap">
-            <table className="submissions-table">
-              <thead>
-                <tr>
-                  <th>Problem</th>
-                  <th>Language</th>
-                  <th>Status</th>
-                  <th>Tests Passed</th>
-                  <th>Runtime</th>
-                  <th>Timestamp</th>
-                </tr>
-              </thead>
-              <tbody>
-                {u.submissions.map((sub: Submission) => (
-                  <tr key={sub.id}>
-                    <td className="sub-problem-title">
-                      {sub.problem?.title || 'Competitive Problem'}
-                    </td>
-                    <td>
-                      <span className="lang-chip">{sub.language}</span>
-                    </td>
-                    <td>
-                      <span className={`sub-status-pill ${sub.status.toLowerCase()}`}>
-                        {sub.status === 'ACCEPTED' ? (
-                          <CheckCircle2 size={13} className="text-emerald" />
-                        ) : (
-                          <XCircle size={13} className="text-rose" />
-                        )}
-                        <span>{sub.status}</span>
-                      </span>
-                    </td>
-                    <td>
-                      {sub.passedCount} / {sub.totalCount}
-                    </td>
-                    <td>
-                      <span className="runtime-tag">
-                        <Clock size={12} /> {sub.runtimeMs}ms
-                      </span>
-                    </td>
-                    <td className="sub-time">
-                      {new Date(sub.submittedAt).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <h3 className="section-title" style={{ marginTop: '2.5rem' }}>Recent Duel Submissions</h3>
+      <div className="submissions-table-card">
+        {(!profileUser.submissions || profileUser.submissions.length === 0) ? (
+          <EmptyState title="No submissions recorded" description="Compete in 1v1 arena duels or solve problems in the studio to build your history." />
         ) : (
-          <div className="empty-submissions-card">
-            <Code2 size={36} className="text-dim" />
-            <p>No recent submissions yet. Jump into an arena match to start competing!</p>
-          </div>
+          <table className="submissions-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Problem</th>
+                <th>Language</th>
+                <th>Passed</th>
+                <th>Runtime</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profileUser.submissions.map((sub: Submission) => (
+                <tr key={sub.id}>
+                  <td>
+                    <span className={`status-tag status-${sub.status.toLowerCase()}`}>
+                      {sub.status === 'ACCEPTED' ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                      <span>{sub.status}</span>
+                    </span>
+                  </td>
+                  <td>{sub.problem?.title || 'Problem Duel'}</td>
+                  <td><span className="lang-pill">{sub.language}</span></td>
+                  <td>{sub.passedCount} / {sub.totalCount}</td>
+                  <td>{sub.runtimeMs}ms</td>
+                  <td>{new Date(sub.submittedAt).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
 
-      {/* Modal: Sync Platforms */}
+      {/* Sync Modal */}
       {showSyncModal && (
         <div className="modal-backdrop">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3>Sync Multi-Platform Handles &amp; Ratings</h3>
-              <button className="btn-close-modal" onClick={() => setShowSyncModal(false)}>
-                ✕
-              </button>
-            </div>
+          <div className="modal-card">
+            <h3>Synchronize External Profiles</h3>
+            <p className="modal-desc">
+              Connect your LeetCode, Codeforces, and CodeChef handles to recompute your aggregated composite rating and global tier.
+            </p>
 
             <form onSubmit={handleSyncSubmit}>
-              <div className="form-section-header">LeetCode Profile</div>
-              <div className="form-row-2">
-                <div className="form-group">
-                  <label>Username</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={lcUsername}
-                    onChange={(e) => setLcUsername(e.target.value)}
-                    placeholder="e.g. gaurav_algo"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Contest Rating</label>
-                  <input
-                    type="number"
-                    className="input-field"
-                    value={lcRating}
-                    onChange={(e) => setLcRating(Number(e.target.value))}
-                  />
-                </div>
+              <div className="form-group">
+                <label>LeetCode Username</label>
+                <input
+                  type="text"
+                  placeholder="e.g. tourist"
+                  value={lcUsername}
+                  onChange={(e) => setLcUsername(e.target.value)}
+                />
               </div>
 
-              <div className="form-section-header">Codeforces Profile</div>
-              <div className="form-row-2">
-                <div className="form-group">
-                  <label>Handle</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={cfHandle}
-                    onChange={(e) => setCfHandle(e.target.value)}
-                    placeholder="e.g. gaurav_cf"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Rating</label>
-                  <input
-                    type="number"
-                    className="input-field"
-                    value={cfRating}
-                    onChange={(e) => setCfRating(Number(e.target.value))}
-                  />
-                </div>
+              <div className="form-group">
+                <label>Codeforces Handle</label>
+                <input
+                  type="text"
+                  placeholder="e.g. tourist"
+                  value={cfHandle}
+                  onChange={(e) => setCfHandle(e.target.value)}
+                />
               </div>
 
-              <div className="form-section-header">CodeChef Profile</div>
-              <div className="form-row-2">
-                <div className="form-group">
-                  <label>Handle</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={ccHandle}
-                    onChange={(e) => setCcHandle(e.target.value)}
-                    placeholder="e.g. gaurav_cc"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Rating</label>
-                  <input
-                    type="number"
-                    className="input-field"
-                    value={ccRating}
-                    onChange={(e) => setCcRating(Number(e.target.value))}
-                  />
-                </div>
+              <div className="form-group">
+                <label>CodeChef Handle</label>
+                <input
+                  type="text"
+                  placeholder="e.g. tourist"
+                  value={ccHandle}
+                  onChange={(e) => setCcHandle(e.target.value)}
+                />
               </div>
 
-              <div className="modal-actions">
+              <div className="modal-actions-row">
                 <button
                   type="button"
-                  className="btn-cancel"
+                  className="btn-secondary"
                   onClick={() => setShowSyncModal(false)}
+                  disabled={syncing}
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-create-submit" disabled={syncing}>
-                  {syncing ? 'Recalculating Ratings...' : 'Save & Recalculate Composite ELO'}
+                <button type="submit" className="btn-primary" disabled={syncing}>
+                  {syncing ? 'Fetching Stats...' : 'Save & Recalculate ELO'}
                 </button>
               </div>
             </form>

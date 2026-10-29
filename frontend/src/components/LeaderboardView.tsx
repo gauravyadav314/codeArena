@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import type { User } from '../types';
 import { api } from '../services/api';
+import { SkeletonLoader } from './SkeletonLoader';
+import { EmptyState } from './EmptyState';
 
 interface LeaderboardViewProps {
   currentUser: User | null;
@@ -70,264 +72,164 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
     });
 
   const getRankBadge = (rank: number) => {
-    if (rank === 1) {
-      return (
-        <div className="rank-podium rank-gold" title="Rank 1 - Grandmaster Champion">
-          <Medal size={20} />
-          <span>#1</span>
-        </div>
-      );
-    }
-    if (rank === 2) {
-      return (
-        <div className="rank-podium rank-silver" title="Rank 2 - Elite Runner-up">
-          <Medal size={20} />
-          <span>#2</span>
-        </div>
-      );
-    }
-    if (rank === 3) {
-      return (
-        <div className="rank-podium rank-bronze" title="Rank 3 - Bronze Contender">
-          <Medal size={20} />
-          <span>#3</span>
-        </div>
-      );
-    }
-    return <span className="rank-default">#{rank}</span>;
+    if (rank === 1) return <span className="rank-badge gold"><Trophy size={16} /> 1</span>;
+    if (rank === 2) return <span className="rank-badge silver"><Medal size={16} /> 2</span>;
+    if (rank === 3) return <span className="rank-badge bronze"><Award size={16} /> 3</span>;
+    return <span className="rank-number">#{rank}</span>;
   };
+
+  const calculateWinRate = (u: User) => {
+    const total = u.wins + u.losses + u.draws;
+    if (total === 0) return 0;
+    return Math.round((u.wins / total) * 100);
+  };
+
+  const tiers = ['All', 'Grandmaster', 'Master', 'Expert', 'Specialist', 'Apprentice', 'Novice'];
 
   return (
     <div className="leaderboard-container">
-      {/* Leaderboard Header */}
-      <div className="lb-hero-header">
-        <div className="lb-hero-content">
-          <div className="pill-badge">
-            <Trophy size={14} className="text-amber" />
-            <span>Official ELO Rankings</span>
+      {/* Header Banner */}
+      <div className="leaderboard-header-banner">
+        <div className="banner-title-block">
+          <div className="banner-icon-wrap gold-glow">
+            <Trophy size={26} />
           </div>
-          <h1>Global Arena Leaderboard</h1>
-          <p>
-            Rankings calibrated from 1v1 battle victories, synchronized cross-platform ratings
-            across LeetCode, Codeforces, and CodeChef, and win-streak multipliers.
-          </p>
+          <div>
+            <h1>Global Arena Leaderboard</h1>
+            <p>Compete, win duels, climb tiers from Novice to Grandmaster, and claim the championship.</p>
+          </div>
         </div>
 
-        <div className="lb-stats-summary">
-          <div className="summary-pill">
-            <span className="summary-val">{users.length}</span>
-            <span className="summary-lbl">Ranked Coders</span>
+        {/* Search, Filter & Sort Controls */}
+        <div className="leaderboard-filter-bar">
+          <div className="search-input-wrap">
+            <Search size={16} />
+            <input
+              type="text"
+              placeholder="Search competitors by handle or tier..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
-          <div className="summary-pill">
-            <span className="summary-val text-amber">
-              {users[0]?.arenaRating ?? 2185}
-            </span>
-            <span className="summary-lbl">Peak ELO</span>
-          </div>
-          <div className="summary-pill">
-            <span className="summary-val text-rose">
-              {users.length > 0 ? Math.max(...users.map((u) => u.streak)) : 0}
-            </span>
-            <span className="summary-lbl">Top Streak</span>
+
+          <div className="filters-group">
+            <div className="filter-select-wrap">
+              <select
+                value={selectedTier}
+                onChange={(e) => setSelectedTier(e.target.value)}
+              >
+                {tiers.map((t) => (
+                  <option key={t} value={t}>
+                    {t === 'All' ? 'All Tiers' : t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="filter-select-wrap">
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+              >
+                <option value="rating">Sort: Highest ELO Rating</option>
+                <option value="winrate">Sort: Highest Win Rate</option>
+                <option value="streak">Sort: Longest Win Streak</option>
+                <option value="wins">Sort: Most Duels Won</option>
+              </select>
+            </div>
+
+            <button className="btn-refresh-icon" onClick={fetchLeaderboard} title="Refresh rankings">
+              <RotateCcw size={16} className={loading ? 'animate-spin' : ''} />
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="lb-controls-bar">
-        <div className="search-input-wrap">
-          <Search size={16} className="search-icon" />
-          <input
-            type="text"
-            className="search-input"
-            placeholder="Search competitor by handle, name, or tier..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+      {/* Leaderboard Table Card */}
+      <div className="leaderboard-card">
+        {loading ? (
+          <div style={{ padding: '2rem' }}>
+            <SkeletonLoader type="table-row" rows={8} />
+          </div>
+        ) : filteredUsers.length === 0 ? (
+          <EmptyState
+            title="No competitors found"
+            description="No players matched your search or tier filter. Try clearing filters to see all competitors."
+            actionText="Reset Filters"
+            onAction={() => {
+              setSearch('');
+              setSelectedTier('All');
+            }}
           />
-        </div>
-
-        <div className="lb-filter-group">
-          <select
-            className="lb-select-control"
-            value={selectedTier}
-            onChange={(e) => setSelectedTier(e.target.value)}
-            title="Filter by Rating Tier"
-          >
-            <option value="All">All Tiers</option>
-            <option value="Grandmaster">Grandmaster</option>
-            <option value="Master">Master</option>
-            <option value="Expert">Expert</option>
-            <option value="Specialist">Specialist</option>
-            <option value="Apprentice">Apprentice</option>
-            <option value="Novice">Novice</option>
-          </select>
-
-          <select
-            className="lb-select-control"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            title="Sort Leaderboard"
-          >
-            <option value="rating">Sort by Rating</option>
-            <option value="winrate">Sort by Win Rate</option>
-            <option value="streak">Sort by Streak</option>
-            <option value="wins">Sort by Wins</option>
-          </select>
-        </div>
-
-        <button className="btn-refresh" onClick={fetchLeaderboard} disabled={loading}>
-          <RotateCcw size={15} className={loading ? 'spin' : ''} />
-          <span>Refresh</span>
-        </button>
-      </div>
-
-      {/* Leaderboard Table */}
-      {loading ? (
-        <div className="lb-loading">
-          <div className="loading-spinner" />
-          <span>Calculating global standings...</span>
-        </div>
-      ) : filteredUsers.length === 0 ? (
-        <div className="empty-lb-state">
-          <Award size={48} className="text-dim" />
-          <h3>No competitors found</h3>
-          <p>Try adjusting your search query.</p>
-        </div>
-      ) : (
-        <div className="table-responsive-wrapper">
+        ) : (
           <table className="leaderboard-table">
             <thead>
               <tr>
-                <th className="th-rank">Rank</th>
-                <th className="th-user">Competitor</th>
-                <th className="th-rating">Arena Rating</th>
-                <th className="th-platforms">Platform Ratings</th>
-                <th className="th-record">W - L - D</th>
-                <th className="th-winrate">Win Rate</th>
-                <th className="th-streak">Streak</th>
-                <th className="th-action">Action</th>
+                <th style={{ width: '8%' }}>Rank</th>
+                <th style={{ width: '32%' }}>Competitor</th>
+                <th style={{ width: '15%' }}>Rating Tier</th>
+                <th style={{ width: '15%' }}>Arena ELO</th>
+                <th style={{ width: '15%' }}>Win Rate</th>
+                <th style={{ width: '15%', textAlign: 'right' }}>Duel Action</th>
               </tr>
             </thead>
             <tbody>
               {filteredUsers.map((user, index) => {
                 const rank = index + 1;
-                const totalMatches = user.wins + user.losses + user.draws;
-                const winRate =
-                  totalMatches > 0
-                    ? Math.round((user.wins / totalMatches) * 100)
-                    : 0;
-                const isCurrentUser = user.username === currentUser?.username;
+                const isCurrent = currentUser?.id === user.id;
+                const winRate = calculateWinRate(user);
 
                 return (
-                  <tr
-                    key={user.id}
-                    className={`lb-row ${rank <= 3 ? `top-rank-${rank}` : ''} ${
-                      isCurrentUser ? 'current-user-row' : ''
-                    }`}
-                  >
-                    <td className="td-rank">{getRankBadge(rank)}</td>
-
-                    <td className="td-user">
-                      <div className="user-cell-wrap">
+                  <tr key={user.id} className={`leaderboard-row ${isCurrent ? 'current-user-row' : ''}`}>
+                    <td className="rank-cell">{getRankBadge(rank)}</td>
+                    <td className="user-cell">
+                      <div className="user-avatar-small">
                         {user.avatarUrl ? (
-                          <img
-                            src={user.avatarUrl}
-                            alt={user.username}
-                            className="lb-user-avatar"
-                          />
+                          <img src={user.avatarUrl} alt={user.username} />
                         ) : (
-                          <div className="lb-user-avatar-fallback">
-                            {user.username[0].toUpperCase()}
-                          </div>
+                          <div className="avatar-placeholder">{user.username.charAt(0).toUpperCase()}</div>
                         )}
-                        <div className="lb-user-details">
-                          <div className="lb-user-name-row">
-                            <span className="lb-user-name">
-                              {user.name || user.username}
-                            </span>
-                            {isCurrentUser && (
-                              <span className="current-user-tag">YOU</span>
-                            )}
-                          </div>
-                          <span className="lb-user-handle">@{user.username}</span>
-                        </div>
                       </div>
-                    </td>
-
-                    <td className="td-rating">
-                      <div className="rating-cell">
-                        <span className="rating-number">{user.arenaRating}</span>
-                        <span className={`tier-badge ${user.ratingTier.toLowerCase().replace(/\s+/g, '-')}`}>
-                          {user.ratingTier}
+                      <div className="user-info">
+                        <span className="username">
+                          {user.username} {isCurrent && <span className="you-pill">YOU</span>}
                         </span>
+                        {user.name && <span className="user-realname">{user.name}</span>}
                       </div>
                     </td>
-
-                    <td className="td-platforms">
-                      <div className="platforms-row">
-                        {user.profile?.leetcodeRating ? (
-                          <span className="platform-chip leetcode" title="LeetCode Rating">
-                            LC {user.profile.leetcodeRating}
-                          </span>
-                        ) : null}
-                        {user.profile?.codeforcesRating ? (
-                          <span className="platform-chip codeforces" title="Codeforces Rating">
-                            CF {user.profile.codeforcesRating}
-                          </span>
-                        ) : null}
-                        {user.profile?.codechefRating ? (
-                          <span className="platform-chip codechef" title="CodeChef Rating">
-                            CC {user.profile.codechefRating}
-                          </span>
-                        ) : null}
-                      </div>
+                    <td>
+                      <span className={`tier-badge tier-${user.ratingTier.toLowerCase()}`}>
+                        {user.ratingTier}
+                      </span>
                     </td>
-
-                    <td className="td-record">
-                      <div className="record-cell">
-                        <span className="rec-win">{user.wins}W</span>
-                        <span className="rec-sep">-</span>
-                        <span className="rec-loss">{user.losses}L</span>
-                        {user.draws > 0 && (
-                          <>
-                            <span className="rec-sep">-</span>
-                            <span className="rec-draw">{user.draws}D</span>
-                          </>
+                    <td>
+                      <div className="rating-cell">
+                        <span className="rating-value">{user.arenaRating}</span>
+                        {user.streak > 1 && (
+                          <span className="streak-flame" title={`${user.streak} win streak!`}>
+                            <Flame size={12} /> {user.streak}
+                          </span>
                         )}
                       </div>
                     </td>
-
-                    <td className="td-winrate">
+                    <td>
                       <div className="winrate-cell">
-                        <div className="winrate-bar-bg">
-                          <div
-                            className="winrate-bar-fill"
-                            style={{ width: `${winRate}%` }}
-                          />
+                        <span className="winrate-percent">{winRate}%</span>
+                        <div className="winrate-record">
+                          <span className="text-emerald">{user.wins}W</span> •{' '}
+                          <span className="text-rose">{user.losses}L</span> •{' '}
+                          <span className="text-muted">{user.draws}D</span>
                         </div>
-                        <span className="winrate-text">{winRate}%</span>
                       </div>
                     </td>
-
-                    <td className="td-streak">
-                      {user.streak > 0 ? (
-                        <div className="streak-badge">
-                          <Flame size={14} className="streak-flame" />
-                          <span>{user.streak}</span>
-                        </div>
-                      ) : (
-                        <span className="text-dim">-</span>
-                      )}
-                    </td>
-
-                    <td className="td-action">
-                      {!isCurrentUser && (
+                    <td style={{ textAlign: 'right' }}>
+                      {!isCurrent && (
                         <button
-                          className="btn-challenge-row"
+                          className="btn-challenge-pill"
                           onClick={() => onChallengeUser(user.username)}
-                          title={`Challenge @${user.username} to 1v1 Arena Duel`}
+                          title={`Challenge ${user.username} to a live 1v1 duel`}
                         >
-                          <Swords size={14} />
+                          <Swords size={13} />
                           <span>Challenge</span>
                         </button>
                       )}
@@ -337,8 +239,8 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
               })}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

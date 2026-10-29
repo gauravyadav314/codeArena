@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   Swords,
   Play,
@@ -11,7 +12,6 @@ import {
   UserPlus,
   Flame,
   Zap,
-  Code,
   Copy,
   Check,
   ChevronRight,
@@ -20,27 +20,37 @@ import {
   Volume2,
   VolumeX,
   MessageSquare,
+  Shield,
+  Radio,
 } from 'lucide-react';
 import type { Match, Problem, User, JudgeVerdict } from '../types';
 import { api } from '../services/api';
 import { SUPPORTED_LANGUAGES, getStarterCode } from '../utils/starterTemplates';
 import { renderMarkdown } from '../utils/markdown';
-import { handleEditorKeyDown } from '../utils/editorUtils';
 import { playSuccessSound, playErrorSound, playVictorySound, playTickSound, soundSettings } from '../utils/sound';
 import { useToast } from './Toast';
+import { CodeEditor } from './CodeEditor';
+import { useSocket } from '../hooks/useSocket';
+import { useAntiCheat } from '../hooks/useAntiCheat';
+import { SkeletonLoader } from './SkeletonLoader';
+import { EmptyState } from './EmptyState';
 
 interface ArenaBattleViewProps {
   currentUser: User | null;
   users: User[];
   onRefreshUsers: () => void;
+  theme?: 'dark' | 'light';
 }
 
 export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   currentUser,
-  users,
   onRefreshUsers,
+  theme = 'dark',
 }) => {
+  const { code: routeMatchCode } = useParams<{ code?: string }>();
+  const navigate = useNavigate();
   const { showToast } = useToast();
+
   const [matches, setMatches] = useState<Match[]>([]);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -59,17 +69,36 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   const [runningTests, setRunningTests] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [verdict, setVerdict] = useState<JudgeVerdict | null>(null);
-  const [selectedTestCaseIndex, setSelectedTestCaseIndex] = useState<number>(0);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [matchEvents, setMatchEvents] = useState<string[]>([]);
   const [timeLeft, setTimeLeft] = useState<number>(900);
   const [victoryModalOpen, setVictoryModalOpen] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(soundSettings.isEnabled());
-  const [chatMessages, setChatMessages] = useState<Array<{ id: string; username: string; text: string; timestamp: string }>>([]);
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; senderUsername?: string; username?: string; text: string; createdAt?: string }>>([]);
   const [chatInput, setChatInput] = useState<string>('');
+  const [opponentProgress, setOpponentProgress] = useState<{ passedCount: number; totalCount: number; status: string } | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Real-time WebSockets Hook
+  const {
+    isConnected: socketConnected,
+    joinMatchRoom,
+    leaveMatchRoom,
+    sendChatMessage: socketSendMessage,
+    onMatchStarted,
+    onMatchProgress,
+    onMatchConcluded,
+    onChatMessage,
+  } = useSocket();
+
+  // Anti-Cheat Tracking Hook
+  const isMatchActive = selectedMatch?.status === 'IN_PROGRESS';
+  const { antiCheatStats, recordPaste } = useAntiCheat(
+    selectedMatch?.code,
+    currentUser?.username,
+    isMatchActive
+  );
 
   // Load matches and problems on mount
   const loadArenaData = async () => {
@@ -97,7 +126,14 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
     loadArenaData();
   }, []);
 
-  // When a match is selected, load its details and initialize code
+  // Handle URL route deep-linking: /arena/:code
+  useEffect(() => {
+    if (routeMatchCode) {
+      enterMatch(routeMatchCode);
+    }
+  }, [routeMatchCode]);
+
+  // When a match is selected, join its room and load details
   const enterMatch = async (matchCode: string) => {
     try {
       const res = await api.getMatch(matchCode);
@@ -108,7 +144,6 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
         setCode(initialStarter);
         setCodeByLanguage({ [initialLang]: initialStarter });
         setVerdict(null);
-        setSelectedTestCaseIndex(0);
         setTimeLeft(res.data.durationSeconds || 900);
         setMatchEvents([
           `Match ${res.data.code} initialized.`,
@@ -117,16 +152,116 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
             ? `Challenger ${res.data.player2.username} is connected.`
             : 'Waiting for challenger to join...',
         ]);
-        if (res.data.status === 'COMPLETED') {
+
+        if (res.data.status === 'COMPLETED' || res.data.status === 'DRAW') {
           setVictoryModalOpen(true);
         } else {
           setVictoryModalOpen(false);
         }
+
+        // Connect to Socket.IO match channel
+        joinMatchRoom(matchCode, currentUser?.username);
+
+        // Fetch past messages
+        api.getMatchMessages(matchCode)
+          .then((msgRes) => {
+            if (msgRes.success) setChatMessages(msgRes.data);
+          })
+          .catch(() => {});
       }
     } catch (err) {
       console.error('Failed to fetch match:', err);
+      showToast('Could not load duel room', 'error');
     }
   };
+
+  const handleExitMatch = () => {
+    if (selectedMatch) {
+      leaveMatchRoom(selectedMatch.code);
+    }
+    setSelectedMatch(null);
+    setVerdict(null);
+    navigate('/arena');
+    loadArenaData();
+  };
+
+  // Socket.IO event listeners for live room state
+  useEffect(() => {
+    if (!selectedMatch) return;
+
+    const cleanupStarted = onMatchStarted((data) => {
+      setSelectedMatch((prev) => (prev ? { ...prev, status: 'IN_PROGRESS' } : null));
+      setTimeLeft(data.durationSeconds || 900);
+      setMatchEvents((prev) => [...prev, '⚔️ Duel Started! Timers synchronized with server.']);
+      showToast('Match started! Good luck!', 'info');
+    });
+
+    const cleanupProgress = onMatchProgress((data) => {
+      if (data.userId !== currentUser?.id) {
+        setOpponentProgress({
+          passedCount: data.passedCount,
+          totalCount: data.totalCount,
+          status: data.status,
+        });
+        setMatchEvents((prev) => [
+          ...prev,
+          `⚡ Opponent submission: Passed ${data.passedCount}/${data.totalCount} test cases (${data.status})`,
+        ]);
+      }
+    });
+
+    const cleanupConcluded = onMatchConcluded((data) => {
+      setSelectedMatch((prev) => (prev ? { ...prev, status: data.outcome === 'DRAW' ? 'DRAW' : 'COMPLETED', winnerId: data.winnerId } : null));
+      if (data.outcome === 'PLAYER_WIN') {
+        const iWon = data.winnerId === currentUser?.id;
+        if (iWon) {
+          playVictorySound();
+          showToast('VICTORY! You won the battle!', 'success');
+        } else {
+          playErrorSound();
+          showToast('DEFEAT! Your opponent solved the problem first.', 'error');
+        }
+      } else {
+        showToast('Match ended as a DRAW.', 'info');
+      }
+      setVictoryModalOpen(true);
+      onRefreshUsers();
+    });
+
+    const cleanupChat = onChatMessage((msg) => {
+      setChatMessages((prev) => [...prev, msg]);
+    });
+
+    return () => {
+      cleanupStarted();
+      cleanupProgress();
+      cleanupConcluded();
+      cleanupChat();
+    };
+  }, [selectedMatch?.code, currentUser?.id, onMatchStarted, onMatchProgress, onMatchConcluded, onChatMessage, showToast, onRefreshUsers]);
+
+  // Synchronized countdown timer with tick sound and auto-draw on expiration
+  useEffect(() => {
+    if (selectedMatch && selectedMatch.status === 'IN_PROGRESS') {
+      timerRef.current = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 10 && prev > 1) {
+            playTickSound();
+          }
+          if (prev <= 1) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [selectedMatch?.status]);
 
   const handleLanguageChange = (newLang: string) => {
     setCodeByLanguage((prev) => ({ ...prev, [selectedLanguage]: code }));
@@ -146,552 +281,474 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
       const starter = getStarterCode(selectedMatch.problem.slug, selectedLanguage, selectedMatch.problem.starterCode);
       setCode(starter);
       setCodeByLanguage((prev) => ({ ...prev, [selectedLanguage]: starter }));
+      showToast('Code reset to default starter template', 'info');
     }
   };
 
-  // Timer effect for active match with auto-draw on expiration
-  useEffect(() => {
-    if (selectedMatch && selectedMatch.status === 'IN_PROGRESS') {
-      timerRef.current = setInterval(() => {
-        setTimeLeft((prev) => {
-          if (prev <= 10 && prev > 1) {
-            playTickSound();
-          }
-          if (prev <= 1) {
-            if (timerRef.current) clearInterval(timerRef.current);
-            if (selectedMatch.status === 'IN_PROGRESS') {
-              api.drawMatch(selectedMatch.code)
-                .then((res) => {
-                  if (res.success) {
-                    setSelectedMatch((m) => (m ? { ...m, status: 'DRAW' } : null));
-                    setMatchEvents((evts) => [...evts, '⌛ Time expired! Match concluded as a DRAW.']);
-                    showToast('Time limit reached — match recorded as a DRAW.', 'info');
-                  }
-                })
-                .catch(() => {});
-            }
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [selectedMatch?.code, selectedMatch?.status, showToast]);
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(true);
+    showToast('Code copied to clipboard', 'success');
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
 
-  // Polling loop for opponent status, match outcome, and battle chat
-  useEffect(() => {
-    if (!selectedMatch) return;
+  const handleRunTests = async () => {
+    if (!selectedMatch || runningTests || submitting) return;
+    setRunningTests(true);
+    setVerdict(null);
 
-    // Fetch initial chat
-    api.getMatchMessages(selectedMatch.code)
-      .then((res) => { if (res.success) setChatMessages(res.data); })
-      .catch(() => {});
-
-    if (selectedMatch.status === 'COMPLETED') {
-      if (pollRef.current) clearInterval(pollRef.current);
-      return;
-    }
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const [matchRes, chatRes] = await Promise.all([
-          api.getMatch(selectedMatch.code),
-          api.getMatchMessages(selectedMatch.code),
-        ]);
-
-        if (chatRes.success) {
-          setChatMessages(chatRes.data);
-        }
-
-        if (matchRes.success) {
-          const updated = matchRes.data;
-          setSelectedMatch((prev) => {
-            if (!prev) return updated;
-            // Detect opponent just joined
-            if (!prev.player2 && updated.player2) {
-              setMatchEvents((evts) => [
-                ...evts,
-                `⚔️ Challenger @${updated.player2!.username} has entered the arena!`,
-              ]);
-            }
-            // Detect match completed by opponent
-            if (prev.status !== 'COMPLETED' && updated.status === 'COMPLETED') {
-              playVictorySound();
-              setVictoryModalOpen(true);
-              setMatchEvents((evts) => [
-                ...evts,
-                `🏁 Match ended! Winner: @${updated.winnerId === updated.player1?.id
-                  ? updated.player1?.username
-                  : updated.player2?.username || 'Unknown'}`,
-              ]);
-            }
-            return { ...prev, ...updated, problem: prev.problem };
-          });
-        }
-      } catch {
-        // silently ignore poll errors
-      }
-    }, 3000);
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [selectedMatch?.code, selectedMatch?.status]);
-
-  const handleSendMessage = async (customText?: string) => {
-    const textToSend = (customText || chatInput).trim();
-    if (!textToSend || !selectedMatch || !currentUser) return;
     try {
-      const res = await api.sendMatchMessage(selectedMatch.code, {
-        username: currentUser.username,
-        text: textToSend,
-      });
+      const res = await api.runProblemCode(selectedMatch.problem.slug, code, selectedLanguage);
       if (res.success) {
-        setChatMessages(res.messages);
-        if (!customText) setChatInput('');
+        setVerdict(res.data);
+        if (res.data.status === 'ACCEPTED') {
+          playSuccessSound();
+          showToast('Sample test cases passed!', 'success');
+        } else {
+          playErrorSound();
+          showToast(`Test failed: ${res.data.status}`, 'error');
+        }
       }
-    } catch {
-      showToast('Could not deliver arena message', 'error');
+    } catch (err) {
+      console.error('Run failed:', err);
+      playErrorSound();
+      showToast('Execution error. Please check your syntax.', 'error');
+    } finally {
+      setRunningTests(false);
     }
   };
 
-  const handleToggleSound = () => {
-    const next = soundSettings.toggle();
-    setSoundEnabled(next);
-    showToast(next ? 'Sound effects enabled' : 'Sound effects muted', 'info');
+  const handleSubmitCode = async () => {
+    if (!selectedMatch || submitting || runningTests || !currentUser) return;
+    setSubmitting(true);
+
+    try {
+      const res = await api.submitMatchCode(selectedMatch.code, {
+        username: currentUser.username,
+        code,
+        language: selectedLanguage,
+      });
+
+      if (res.success) {
+        showToast('Solution submitted to judge queue!', 'info');
+      }
+    } catch (err: any) {
+      console.error('Submission failed:', err);
+      playErrorSound();
+      showToast(err.message || 'Submission failed', 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  // Host new match
-  const handleCreateMatch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser) return;
+  const handleCreateMatch = async () => {
+    if (!currentUser || !createProblemId) return;
     setCreating(true);
+
     try {
       const res = await api.createMatch({
         problemId: createProblemId,
         player1Username: currentUser.username,
         durationSeconds: createDuration,
       });
+
       if (res.success) {
         setShowCreateModal(false);
-        await loadArenaData();
+        showToast(`Duel created! Room Code: ${res.data.code}`, 'success');
+        navigate(`/arena/${res.data.code}`);
         enterMatch(res.data.code);
-        showToast(`Match ${res.data.code} created!`, 'success');
       }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to create match', 'error');
+    } catch (err: any) {
+      console.error('Match creation error:', err);
+      showToast(err.message || 'Failed to create match', 'error');
     } finally {
       setCreating(false);
     }
   };
 
-  // Join match as player 2
-  const handleJoinMatch = async (matchCode: string) => {
-    if (!currentUser) return;
+  const handleJoinMatch = async (matchToJoin: Match) => {
+    if (!currentUser) {
+      showToast('Please select or register a profile first', 'info');
+      return;
+    }
+
     try {
-      const res = await api.joinMatch(matchCode, currentUser.username);
+      const res = await api.joinMatch(matchToJoin.code, currentUser.username);
       if (res.success) {
-        await loadArenaData();
-        enterMatch(matchCode);
-        showToast(`Joined match ${matchCode}!`, 'success');
+        showToast(`Joined match ${matchToJoin.code}! Duel begins.`, 'success');
+        navigate(`/arena/${matchToJoin.code}`);
+        enterMatch(matchToJoin.code);
       }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to join match', 'error');
+    } catch (err: any) {
+      console.error('Join error:', err);
+      showToast(err.message || 'Failed to join match', 'error');
     }
   };
 
-  // Quick Match: Find waiting match or create one
-  const handleQuickMatch = async () => {
-    if (!currentUser) return;
-    const waitingMatch = matches.find((m) => m.status === 'WAITING' && m.player1?.username !== currentUser.username);
-    if (waitingMatch) {
-      handleJoinMatch(waitingMatch.code);
-    } else {
-      // Create match and join
-      const problem = problems[Math.floor(Math.random() * problems.length)];
-      if (!problem) return;
-      try {
-        const res = await api.createMatch({
-          problemId: problem.id,
-          player1Username: currentUser.username,
-          durationSeconds: 900,
-        });
-        if (res.success) {
-          await loadArenaData();
-          enterMatch(res.data.code);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
+  const handleSendChatMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!chatInput.trim() || !selectedMatch || !currentUser) return;
+
+    const text = chatInput.trim();
+    setChatInput('');
+
+    // Emit via WebSocket
+    socketSendMessage(selectedMatch.code, currentUser.username, text);
+
+    // Persist via REST
+    api.sendMatchMessage(selectedMatch.code, {
+      senderUsername: currentUser.username,
+      text,
+    }).catch(() => {});
   };
 
-  // Bot challenger simulator
-  const handleSimulateBotOpponent = async () => {
-    if (!selectedMatch || !currentUser) return;
-    // Find an alternate user to join
-    const opponent = users.find((u) => u.username !== currentUser.username) || {
-      username: 'sophia_code',
-    };
-
-    try {
-      const joinRes = await api.joinMatch(selectedMatch.code, opponent.username);
-      if (joinRes.success) {
-        setSelectedMatch((prev) => {
-          if (!prev) return joinRes.data;
-          return {
-            ...prev,
-            ...joinRes.data,
-            player1: joinRes.data.player1 || prev.player1,
-            player2: joinRes.data.player2 || prev.player2,
-            problem: joinRes.data.problem || prev.problem,
-          };
-        });
-        setMatchEvents((prev) => [
-          ...prev,
-          `Opponent @${opponent.username} entered the arena! Duel commenced.`,
-        ]);
-        await loadArenaData();
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // Run tests locally without final submission
-  const handleRunTests = async () => {
-    if (!selectedMatch) return;
-    setRunningTests(true);
-    try {
-      const res = await api.runProblemCode(selectedMatch.problem.slug, code, selectedLanguage);
-      if (res.success) {
-        setVerdict(res.verdict);
-        setSelectedTestCaseIndex(0);
-        if (res.verdict.status === 'ACCEPTED') {
-          playSuccessSound();
-        } else {
-          playErrorSound();
-        }
-        setMatchEvents((prev) => [
-          ...prev,
-          `Ran tests: ${res.verdict.passedCount}/${res.verdict.totalCount} passed in ${res.verdict.runtimeMs}ms.`,
-        ]);
-      }
-    } catch (err) {
-      playErrorSound();
-      console.error(err);
-    } finally {
-      setRunningTests(false);
-    }
-  };
-
-  // Submit code to official judge for match evaluation
-  const handleSubmitCode = async () => {
-    if (!selectedMatch || !currentUser) return;
-    setSubmitting(true);
-    try {
-      const res = await api.submitMatchCode(selectedMatch.code, {
-        username: currentUser.username,
-        codeContent: code,
-        language: selectedLanguage,
-      });
-
-      if (res.success) {
-        setVerdict(res.verdict);
-        setSelectedTestCaseIndex(0);
-        setSelectedMatch((prev) => {
-          if (!prev) return res.match;
-          return {
-            ...prev,
-            ...res.match,
-            player1: res.match.player1 || prev.player1,
-            player2: res.match.player2 || prev.player2,
-            problem: res.match.problem || prev.problem,
-          };
-        });
-
-        if (res.verdict.status === 'ACCEPTED') {
-          playVictorySound();
-          setVictoryModalOpen(true);
-          setMatchEvents((prev) => [
-            ...prev,
-            `🎉 ACCEPTED! @${currentUser.username} submitted full solution and claimed victory!`,
-          ]);
-          showToast('Accepted! Victory claimed!', 'success');
-          onRefreshUsers();
-        } else {
-          playErrorSound();
-          setMatchEvents((prev) => [
-            ...prev,
-            `Submission: ${res.verdict.status} (${res.verdict.passedCount}/${res.verdict.totalCount} tests passed)`,
-          ]);
-          showToast(`Verdict: ${res.verdict.status}`, 'error');
-        }
-        await loadArenaData();
-      }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Submission failed', 'error');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Copy code helper
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(code);
-    setCopiedCode(true);
-    showToast('Code copied to clipboard', 'info');
-    setTimeout(() => setCopiedCode(false), 2000);
-  };
-
-  // Format seconds to mm:ss
-  const formatTime = (seconds: number) => {
+  const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const isMatchFinished = selectedMatch?.status === 'COMPLETED' || selectedMatch?.status === 'DRAW';
+
   // ==========================================
-  // RENDER: LOBBY VIEW
+  // VIEW 1: ACTIVE MATCH ARENA
   // ==========================================
-  if (!selectedMatch) {
+  if (selectedMatch) {
+    const isPlayer1 = currentUser?.id === selectedMatch.player1.id;
+
     return (
-      <div className="arena-lobby-container">
-        {/* Arena Header Banner */}
-        <div className="arena-hero-banner">
-          <div className="hero-banner-content">
-            <div className="arena-badge-pill">
-              <Zap size={14} className="text-amber" />
-              <span>Real-Time Algorithmic 1v1 Battle Arena</span>
-            </div>
-            <h1 className="arena-title">
-              Live Code Duels &amp; <span className="text-gradient">Ranked Battles</span>
-            </h1>
-            <p className="arena-description">
-              Go head-to-head against fellow developers in timed programming matches. Write code,
-              pass automated test suites, and climb the global ELO ladder.
-            </p>
-
-            <div className="arena-action-row">
-              <button className="btn-primary-action" onClick={handleQuickMatch}>
-                <Swords size={18} />
-                <span>Instant Quick Duel</span>
-              </button>
+      <div className="arena-battle-view">
+        {/* Arena Navigation & Status Bar */}
+        <div className="arena-top-bar">
+          <div className="arena-top-left">
+            <button className="btn-back" onClick={handleExitMatch}>
+              <ArrowLeft size={16} />
+              <span>Leave Arena</span>
+            </button>
+            <div className="match-code-tag">
+              <Swords size={14} className="text-amber" />
+              <span>{selectedMatch.code}</span>
               <button
-                className="btn-secondary-action"
-                onClick={() => setShowCreateModal(true)}
+                className="btn-copy-code"
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.href);
+                  showToast('Duel URL copied to clipboard!', 'success');
+                }}
+                title="Share duel link with an opponent"
               >
-                <UserPlus size={18} />
-                <span>Host Custom Room</span>
+                <Copy size={12} />
               </button>
             </div>
+            {socketConnected && (
+              <span className="live-socket-indicator" title="Connected to Real-time WebSockets">
+                <Radio size={14} className="text-emerald animate-pulse" />
+                <span>Live Sync</span>
+              </span>
+            )}
           </div>
 
-          <div className="hero-stats-card">
-            <div className="hero-stat-item">
-              <span className="stat-label">Rating Stakes</span>
-              <span className="stat-value text-emerald">±25 ELO</span>
+          <div className="arena-top-center">
+            {/* Server-Authoritative Timer */}
+            <div className={`countdown-clock ${timeLeft <= 60 ? 'warning animate-pulse' : ''}`}>
+              <Clock size={16} />
+              <span className="timer-digits">{formatTimer(timeLeft)}</span>
             </div>
-            <div className="hero-stat-item">
-              <span className="stat-label">Active Rooms</span>
-              <span className="stat-value">{matches.length}</span>
-            </div>
-            <div className="hero-stat-item">
-              <span className="stat-label">Languages</span>
-              <span className="stat-value">JS / TS / Python</span>
+
+            {/* Anti-Cheat Real-time Status Badge */}
+            <div
+              className={`anticheat-badge ${antiCheatStats.tabBlurCount > 0 ? 'badge-flagged' : 'badge-clean'}`}
+              title="Monitors tab switches, window blurs, and paste speed"
+            >
+              <Shield size={13} />
+              <span>
+                Anti-Cheat: {antiCheatStats.tabBlurCount === 0 ? 'Clean' : `${antiCheatStats.tabBlurCount} blur(s)`}
+              </span>
             </div>
           </div>
-        </div>
 
-        {/* Active Arena Matches List */}
-        <div className="arena-rooms-section">
-          <div className="section-header-row">
-            <div>
-              <h2 className="section-heading">Available Match Arenas</h2>
-              <p className="section-subheading">
-                Join an active duel or watch live head-to-head coding sessions
-              </p>
-            </div>
-            <button className="btn-refresh" onClick={loadArenaData} disabled={loading}>
-              <RotateCcw size={15} className={loading ? 'spin' : ''} />
-              <span>Refresh</span>
+          <div className="arena-top-right">
+            <button
+              className="sound-toggle-btn"
+              onClick={() => {
+                const toggled = soundSettings.toggle();
+                setSoundEnabled(toggled);
+                showToast(toggled ? 'Sound effects enabled' : 'Sound effects muted', 'info');
+              }}
+              title="Toggle game sound effects"
+            >
+              {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} className="text-muted" />}
             </button>
           </div>
-
-          {loading ? (
-            <div className="arena-loading-state">
-              <div className="loading-spinner" />
-              <span>Scanning live battle nodes...</span>
-            </div>
-          ) : matches.length === 0 ? (
-            <div className="empty-rooms-card">
-              <Swords size={48} className="empty-icon" />
-              <h3>No Active Match Rooms</h3>
-              <p>Be the first to create an arena match room or jump into a quick duel!</p>
-              <button className="btn-primary-action" onClick={handleQuickMatch}>
-                <Play size={16} /> Create Quick Duel
-              </button>
-            </div>
-          ) : (
-            <div className="arena-grid">
-              {matches.map((m) => {
-                const isWaiting = m.status === 'WAITING';
-                const isLive = m.status === 'IN_PROGRESS';
-                const isCompleted = m.status === 'COMPLETED';
-                const canJoin = isWaiting && currentUser && m.player1?.username !== currentUser.username;
-
-                return (
-                  <div key={m.id} className={`arena-room-card ${m.status.toLowerCase()}`}>
-                    <div className="room-card-header">
-                      <span className="room-code-tag">{m.code}</span>
-                      <span className={`match-status-badge ${m.status.toLowerCase()}`}>
-                        {isLive && <span className="pulsing-dot" />}
-                        {m.status}
-                      </span>
-                    </div>
-
-                    <div className="room-problem-info">
-                      <div className="problem-meta">
-                        <span className={`diff-pill ${m.problem.difficulty.toLowerCase()}`}>
-                          {m.problem.difficulty}
-                        </span>
-                        <span className="category-pill">{m.problem.category}</span>
-                      </div>
-                      <h3 className="room-problem-title">{m.problem.title}</h3>
-                    </div>
-
-                    {/* Players Matchup */}
-                    <div className="room-matchup">
-                      <div className="matchup-player">
-                        {m.player1?.avatarUrl ? (
-                          <img src={m.player1.avatarUrl} alt={m.player1.username} className="player-avatar" />
-                        ) : (
-                          <div className="player-avatar-fallback">{m.player1?.username?.[0] || 'H'}</div>
-                        )}
-                        <div className="player-meta">
-                          <span className="player-name">{m.player1?.name || m.player1?.username || 'Host Player'}</span>
-                          <span className="player-rating">{m.player1?.arenaRating ?? 1200} ELO</span>
-                        </div>
-                      </div>
-
-                      <div className="vs-badge">VS</div>
-
-                      <div className="matchup-player opponent">
-                        {m.player2 ? (
-                          <>
-                            {m.player2.avatarUrl ? (
-                              <img src={m.player2.avatarUrl} alt={m.player2.username} className="player-avatar" />
-                            ) : (
-                              <div className="player-avatar-fallback">{m.player2.username?.[0] || 'O'}</div>
-                            )}
-                            <div className="player-meta">
-                              <span className="player-name">{m.player2.name || m.player2.username}</span>
-                              <span className="player-rating">{m.player2.arenaRating ?? 1200} ELO</span>
-                            </div>
-                          </>
-                        ) : (
-                          <div className="waiting-player-placeholder">
-                            <span className="pulse-text">Waiting for challenger...</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="room-footer">
-                      <div className="duration-tag">
-                        <Clock size={14} />
-                        <span>{Math.round(m.durationSeconds / 60)} mins</span>
-                      </div>
-
-                      <div className="room-actions">
-                        {canJoin ? (
-                          <button
-                            className="btn-join-match"
-                            onClick={() => handleJoinMatch(m.code)}
-                          >
-                            <span>Accept Duel</span>
-                            <ChevronRight size={16} />
-                          </button>
-                        ) : (
-                          <button
-                            className="btn-enter-match"
-                            onClick={() => enterMatch(m.code)}
-                          >
-                            <span>{isCompleted ? 'View Results' : 'Enter Arena'}</span>
-                            <ChevronRight size={16} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
 
-        {/* Modal: Host Custom Match Room */}
-        {showCreateModal && (
-          <div className="modal-backdrop">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h3>Host Custom 1v1 Arena</h3>
-                <button className="btn-close-modal" onClick={() => setShowCreateModal(false)}>
-                  ✕
-                </button>
+        {/* 1v1 Scoreboard Bar */}
+        <div className="scoreboard-strip">
+          {/* Player 1 Card */}
+          <div className={`player-card-compact ${isPlayer1 ? 'active-player' : ''}`}>
+            <div className="player-avatar-small">
+              {selectedMatch.player1.avatarUrl ? (
+                <img src={selectedMatch.player1.avatarUrl} alt={selectedMatch.player1.username} />
+              ) : (
+                <div className="avatar-placeholder">{selectedMatch.player1.username.charAt(0).toUpperCase()}</div>
+              )}
+            </div>
+            <div className="player-info-compact">
+              <span className="player-name">{selectedMatch.player1.username}</span>
+              <span className="player-rating">{selectedMatch.player1.arenaRating} ELO ({selectedMatch.player1.ratingTier})</span>
+            </div>
+          </div>
+
+          <div className="scoreboard-vs">
+            <Swords size={20} className="text-amber" />
+          </div>
+
+          {/* Player 2 Card */}
+          <div className={`player-card-compact ${!isPlayer1 && selectedMatch.player2 ? 'active-player' : ''}`}>
+            {selectedMatch.player2 ? (
+              <>
+                <div className="player-avatar-small">
+                  {selectedMatch.player2.avatarUrl ? (
+                    <img src={selectedMatch.player2.avatarUrl} alt={selectedMatch.player2.username} />
+                  ) : (
+                    <div className="avatar-placeholder">{selectedMatch.player2.username.charAt(0).toUpperCase()}</div>
+                  )}
+                </div>
+                <div className="player-info-compact">
+                  <span className="player-name">{selectedMatch.player2.username}</span>
+                  <span className="player-rating">{selectedMatch.player2.arenaRating} ELO ({selectedMatch.player2.ratingTier})</span>
+                </div>
+              </>
+            ) : (
+              <div className="waiting-player-placeholder">
+                <Bot size={16} className="animate-spin" />
+                <span>Waiting for opponent...</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Opponent Progress Alert Strip */}
+        {opponentProgress && (
+          <div className="opponent-progress-alert">
+            <Zap size={14} className="text-amber" />
+            <span>
+              Opponent Progress: Passed {opponentProgress.passedCount}/{opponentProgress.totalCount} test cases ({opponentProgress.status})
+            </span>
+          </div>
+        )}
+
+        {/* Main Duel Grid: Split Problem Statement vs Monaco Editor */}
+        <div className="duel-grid-container">
+          {/* Left Column: Problem Statement & Chat Feed */}
+          <div className="duel-left-col">
+            <div className="problem-panel-card">
+              <div className="problem-meta-strip">
+                <h3>{selectedMatch.problem.title}</h3>
+                <span className={`badge-difficulty diff-${selectedMatch.problem.difficulty.toLowerCase()}`}>
+                  {selectedMatch.problem.difficulty}
+                </span>
+                <span className="badge-category">{selectedMatch.problem.category}</span>
               </div>
 
-              <form onSubmit={handleCreateMatch}>
-                <div className="form-group">
-                  <label>Select Challenge Problem</label>
+              <div
+                className="problem-desc-scroll markdown-content"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedMatch.problem.description) }}
+              />
+            </div>
+
+            {/* In-Match Live Chat & Quick Taunts */}
+            <div className="duel-chat-card">
+              <div className="chat-header">
+                <MessageSquare size={14} />
+                <span>Match Feed & Taunts</span>
+              </div>
+              <div className="chat-messages-scroll">
+                {matchEvents.map((evt, i) => (
+                  <div key={`evt-${i}`} className="chat-event-item">
+                    <span>{evt}</span>
+                  </div>
+                ))}
+                {chatMessages.map((msg, i) => (
+                  <div key={`msg-${i}`} className="chat-user-message">
+                    <strong className="chat-author">{msg.senderUsername || msg.username}:</strong>
+                    <span className="chat-text">{msg.text}</span>
+                  </div>
+                ))}
+              </div>
+              <form onSubmit={handleSendChatMessage} className="chat-input-row">
+                <input
+                  type="text"
+                  placeholder="Send a taunt or greeting..."
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  maxLength={140}
+                />
+                <button type="submit" disabled={!chatInput.trim()}>
+                  <Send size={14} />
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* Right Column: Monaco Code Editor & Test Case Panel */}
+          <div className="duel-right-col">
+            <div className="editor-panel-card">
+              <div className="editor-toolbar">
+                <div className="toolbar-left">
+                  <label>Language:</label>
                   <select
-                    className="select-field"
-                    value={createProblemId}
-                    onChange={(e) => setCreateProblemId(e.target.value)}
-                    required
+                    value={selectedLanguage}
+                    onChange={(e) => handleLanguageChange(e.target.value)}
+                    disabled={isMatchFinished}
                   >
-                    {problems.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.title} ({p.difficulty} - {p.category})
+                    {SUPPORTED_LANGUAGES.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
                       </option>
                     ))}
                   </select>
                 </div>
 
-                <div className="form-group">
-                  <label>Match Duration Limit</label>
-                  <div className="duration-picker">
-                    {[300, 600, 900, 1200].map((sec) => (
-                      <button
-                        type="button"
-                        key={sec}
-                        className={`btn-pill-choice ${createDuration === sec ? 'active' : ''}`}
-                        onClick={() => setCreateDuration(sec)}
-                      >
-                        {sec / 60} Minutes
-                      </button>
+                <div className="toolbar-right">
+                  <button className="toolbar-btn" onClick={handleCopyCode} title="Copy code">
+                    {copiedCode ? <Check size={14} className="text-emerald" /> : <Copy size={14} />}
+                    <span>{copiedCode ? 'Copied' : 'Copy'}</span>
+                  </button>
+                  <button className="toolbar-btn" onClick={handleResetCode} disabled={isMatchFinished}>
+                    <RotateCcw size={14} />
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Professional Monaco Code Editor */}
+              <div className="monaco-container" style={{ minHeight: '440px', height: '440px', position: 'relative' }}>
+                <CodeEditor
+                  code={code}
+                  onChange={setCode}
+                  language={selectedLanguage}
+                  theme={theme}
+                  readOnly={isMatchFinished}
+                  onRunTests={handleRunTests}
+                  onSubmitCode={handleSubmitCode}
+                  onPasteDetected={recordPaste}
+                />
+              </div>
+
+              {/* Editor Action Buttons */}
+              <div className="editor-footer-actions">
+                <div className="action-hint">
+                  <Zap size={14} className="text-amber" />
+                  <span>Ctrl+Enter to run sample tests • Ctrl+Shift+Enter to submit solution</span>
+                </div>
+
+                <div className="action-btn-group">
+                  <button
+                    className="btn-run-tests"
+                    onClick={handleRunTests}
+                    disabled={runningTests || submitting || isMatchFinished}
+                  >
+                    <Play size={16} />
+                    <span>{runningTests ? 'Evaluating...' : 'Run Tests'}</span>
+                  </button>
+
+                  <button
+                    className="btn-submit-solution"
+                    onClick={handleSubmitCode}
+                    disabled={submitting || runningTests || isMatchFinished}
+                  >
+                    <Send size={16} />
+                    <span>{submitting ? 'Judging...' : 'Submit Solution'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Test Case Verdict Drawer */}
+              {verdict && (
+                <div className={`verdict-output-tray verdict-${verdict.status.toLowerCase()}`}>
+                  <div className="verdict-tray-header">
+                    <div className="verdict-title-group">
+                      {verdict.status === 'ACCEPTED' ? (
+                        <CheckCircle2 size={18} className="text-emerald" />
+                      ) : (
+                        <XCircle size={18} className="text-rose" />
+                      )}
+                      <span className="verdict-status-title">{verdict.status}</span>
+                    </div>
+                    <div className="verdict-meta-stats">
+                      <span>Passed: {verdict.passedCount} / {verdict.totalCount}</span>
+                      <span>Runtime: {verdict.runtimeMs}ms</span>
+                    </div>
+                  </div>
+
+                  <div className="verdict-tray-body">
+                    {verdict.results?.map((res, i) => (
+                      <div key={i} className={`testcase-row ${res.passed ? 'passed' : 'failed'}`}>
+                        <div className="tc-header">
+                          <span className="tc-tag">Case {i + 1}</span>
+                          <span className={`tc-status ${res.passed ? 'text-emerald' : 'text-rose'}`}>
+                            {res.passed ? 'PASSED' : 'FAILED'}
+                          </span>
+                          <span className="tc-runtime">{res.runtimeMs}ms</span>
+                        </div>
+                        <div className="tc-details">
+                          <div className="tc-block">
+                            <span className="tc-label">Input:</span>
+                            <pre>{JSON.stringify(res.input)}</pre>
+                          </div>
+                          <div className="tc-block">
+                            <span className="tc-label">Expected:</span>
+                            <pre>{JSON.stringify(res.expected)}</pre>
+                          </div>
+                          {!res.passed && res.actual !== undefined && (
+                            <div className="tc-block">
+                              <span className="tc-label text-rose">Your Output:</span>
+                              <pre>{JSON.stringify(res.actual)}</pre>
+                            </div>
+                          )}
+                          {res.error && (
+                            <div className="tc-block tc-error-msg">
+                              <span className="tc-label text-rose">Error:</span>
+                              <pre>{res.error}</pre>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>
+              )}
+            </div>
+          </div>
+        </div>
 
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="btn-cancel"
-                    onClick={() => setShowCreateModal(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn-create-submit" disabled={creating}>
-                    {creating ? 'Spinning up Arena...' : 'Create Arena Room'}
-                  </button>
-                </div>
-              </form>
+        {/* Victory / Defeat Modal */}
+        {victoryModalOpen && (
+          <div className="modal-backdrop">
+            <div className="modal-card victory-modal animate-scale-up">
+              <div className="victory-icon-circle">
+                <Trophy size={48} className="text-amber" />
+              </div>
+              <h2>
+                {selectedMatch.status === 'DRAW'
+                  ? 'Match Drawn!'
+                  : selectedMatch.winnerId === currentUser?.id
+                  ? 'VICTORY!'
+                  : 'DEFEAT!'}
+              </h2>
+              <p className="modal-subtitle">
+                {selectedMatch.status === 'DRAW'
+                  ? 'Time expired or players accepted a draw. ELO ratings synchronized.'
+                  : selectedMatch.winnerId === currentUser?.id
+                  ? 'Congratulations! You solved the problem first and gained ELO points.'
+                  : 'Opponent solved the problem first. Keep training to climb back up!'}
+              </p>
+
+              <div className="modal-actions-row">
+                <button className="btn-primary" onClick={handleExitMatch}>
+                  Back to Arena Lobby
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -700,432 +757,174 @@ export const ArenaBattleView: React.FC<ArenaBattleViewProps> = ({
   }
 
   // ==========================================
-  // RENDER: ACTIVE DUEL ARENA VIEW
+  // VIEW 2: ARENA LOBBY & MATCH LIST
   // ==========================================
-  const hostPlayer = selectedMatch.player1 || {
-    id: selectedMatch.player1Id || 'p1',
-    username: 'Host',
-    name: 'Host Player',
-    arenaRating: 1200,
-    ratingTier: 'Novice',
-    avatarUrl: null,
-  };
-  const opponentPlayer = selectedMatch.player2;
-  const isHost = currentUser?.username === hostPlayer.username;
-  const isMatchFinished = selectedMatch.status === 'COMPLETED';
-  const winner = selectedMatch.winnerId
-    ? selectedMatch.winnerId === hostPlayer.id
-      ? hostPlayer
-      : opponentPlayer
-    : null;
-
   return (
-    <div className="arena-live-workspace">
-      {/* Top Match Arena Bar */}
-      <div className="live-arena-navbar">
-        <div className="live-nav-left">
-          <button className="btn-back-lobby" onClick={() => setSelectedMatch(null)}>
-            <ArrowLeft size={16} />
-            <span>Lobby</span>
-          </button>
-          <div className="match-title-wrap">
-            <span className="match-code-badge">{selectedMatch.code}</span>
-            <h2 className="match-problem-heading">{selectedMatch.problem?.title || 'Arena Problem'}</h2>
-            {selectedMatch.problem?.difficulty && (
-              <span className={`diff-pill ${selectedMatch.problem.difficulty.toLowerCase()}`}>
-                {selectedMatch.problem.difficulty}
-              </span>
-            )}
+    <div className="arena-lobby-container">
+      {/* Lobby Header Hero */}
+      <div className="arena-hero-banner">
+        <div className="hero-content">
+          <div className="hero-badge">
+            <Flame size={16} />
+            <span>LIVE 1V1 COMPETITIVE PROGRAMMING</span>
           </div>
-        </div>
-
-        {/* Live Countdown Timer */}
-        <div className={`live-timer-chip ${timeLeft < 180 ? 'urgent' : ''}`}>
-          <Clock size={16} className="timer-icon" />
-          <span className="timer-clock">{formatTime(timeLeft)}</span>
-        </div>
-
-        <div className="live-nav-right">
-          <button
-            className="btn-sound-toggle"
-            onClick={handleToggleSound}
-            title={soundEnabled ? 'Mute Arena Sounds' : 'Enable Arena Sounds'}
-            aria-label="Toggle sound effects"
-          >
-            {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-          </button>
-
-          {!opponentPlayer && selectedMatch.status === 'WAITING' && (
-            <button
-              className="btn-bot-challenge"
-              onClick={handleSimulateBotOpponent}
-              title="Spawn simulated opponent for practice duel"
-            >
-              <Bot size={16} />
-              <span>Invite AI Opponent</span>
+          <h1>CodeArena Duel Grounds</h1>
+          <p>
+            Challenge real-time opponents in head-to-head algorithmic speed duels. Winner takes ELO, climbs tiers, and dominates the leaderboard.
+          </p>
+          <div className="hero-cta-group">
+            <button className="btn-create-duel" onClick={() => setShowCreateModal(true)}>
+              <Swords size={18} />
+              <span>Create Duel Room</span>
             </button>
-          )}
-
-          <div className={`match-status-tag ${selectedMatch.status.toLowerCase()}`}>
-            {selectedMatch.status === 'IN_PROGRESS' ? 'LIVE DUEL' : selectedMatch.status}
           </div>
         </div>
       </div>
 
-      {/* Head-to-Head Duel Scoreboard */}
-      <div className="duel-scoreboard">
-        {/* Player 1 Card */}
-        <div className={`scoreboard-player-card ${winner?.id === hostPlayer.id ? 'victor' : ''}`}>
-          {hostPlayer.avatarUrl ? (
-            <img src={hostPlayer.avatarUrl} alt={hostPlayer.username} className="sb-avatar" />
-          ) : (
-            <div className="sb-avatar-fallback">{hostPlayer.username?.[0] || 'H'}</div>
-          )}
-          <div className="sb-info">
-            <div className="sb-name-row">
-              <span className="sb-player-name">{hostPlayer.name || hostPlayer.username}</span>
-              {isHost && <span className="sb-host-badge">YOU</span>}
-            </div>
-            <span className="sb-tier-label">{hostPlayer.ratingTier || 'Novice'} • {hostPlayer.arenaRating ?? 1200} ELO</span>
-          </div>
-          <div className="sb-score-badge">
-            <span className="score-val">{selectedMatch.player1Score ?? 0}</span>
-            <span className="score-lbl">PTS</span>
-          </div>
+      {/* Active Matches Grid */}
+      <div className="matches-section">
+        <div className="section-header">
+          <h2>Active & Recent Arena Duels</h2>
+          <button className="btn-refresh" onClick={loadArenaData} disabled={loading}>
+            <RotateCcw size={14} className={loading ? 'animate-spin' : ''} />
+            <span>Refresh</span>
+          </button>
         </div>
 
-        {/* VS Badge */}
-        <div className="scoreboard-vs">
-          <div className="vs-swords-ring">
-            <Swords size={20} className="swords-icon" />
+        {loading ? (
+          <div style={{ padding: '2rem' }}>
+            <SkeletonLoader type="card" rows={3} />
           </div>
-          <span className="vs-tag">1v1 DUEL</span>
-        </div>
+        ) : matches.length === 0 ? (
+          <EmptyState
+            title="No active duels found"
+            description="Create a new duel room to challenge friends or queue up against other competitors!"
+            actionText="Create Duel Room"
+            onAction={() => setShowCreateModal(true)}
+          />
+        ) : (
+          <div className="matches-grid">
+            {matches.map((m) => {
+              const isWaiting = m.status === 'WAITING';
+              const isInProgress = m.status === 'IN_PROGRESS';
+              const canJoin = isWaiting && currentUser && m.player1.id !== currentUser.id;
 
-        {/* Player 2 Card */}
-        <div className={`scoreboard-player-card opponent ${winner?.id === opponentPlayer?.id ? 'victor' : ''}`}>
-          {opponentPlayer ? (
-            <>
-              <div className="sb-score-badge">
-                <span className="score-val">{selectedMatch.player2Score ?? 0}</span>
-                <span className="score-lbl">PTS</span>
-              </div>
-              <div className="sb-info text-right">
-                <div className="sb-name-row justify-end">
-                  {!isHost && currentUser?.username === opponentPlayer.username && (
-                    <span className="sb-host-badge">YOU</span>
-                  )}
-                  <span className="sb-player-name">{opponentPlayer.name || opponentPlayer.username}</span>
-                </div>
-                <span className="sb-tier-label">{opponentPlayer.ratingTier || 'Novice'} • {opponentPlayer.arenaRating ?? 1200} ELO</span>
-              </div>
-              {opponentPlayer.avatarUrl ? (
-                <img src={opponentPlayer.avatarUrl} alt={opponentPlayer.username} className="sb-avatar" />
-              ) : (
-                <div className="sb-avatar-fallback">{opponentPlayer.username?.[0] || 'O'}</div>
-              )}
-            </>
-          ) : (
-            <div className="waiting-opponent-banner">
-              <span className="pulse-dot-cyan" />
-              <span>Waiting for Opponent to Enter Arena...</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Main Dual Workspace: Problem Description vs Code Editor */}
-      <div className="arena-split-layout">
-        {/* Left Column: Problem Details & Event Feed */}
-        <div className="arena-left-pane">
-          <div className="problem-sheet">
-            <div className="sheet-header">
-              <div className="category-tag">{selectedMatch.problem.category}</div>
-              <div className="sheet-metrics">
-                <span>Time Limit: {selectedMatch.problem.timeLimitMs}ms</span>
-                <span>•</span>
-                <span>Acceptance: {selectedMatch.problem.acceptanceRate}%</span>
-              </div>
-            </div>
-
-            <div className="problem-text-content">
-              <h3>Problem Description</h3>
-              <div
-                className="problem-md-content"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedMatch.problem.description) }}
-              />
-            </div>
-
-            {/* Live Arena Events Feed */}
-            <div className="arena-events-feed">
-              <h4 className="events-title">
-                <Flame size={14} className="text-amber" /> Live Arena Feed
-              </h4>
-              <div className="events-list">
-                {matchEvents.map((evt, idx) => (
-                  <div key={idx} className="event-item">
-                    <span className="event-bullet">•</span>
-                    <span>{evt}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Match Chat & Battle Reactions */}
-              <div className="arena-chat-section">
-                <div className="chat-section-header">
-                  <MessageSquare size={13} className="text-cyan" />
-                  <span>Battle Taunts &amp; Chat</span>
-                </div>
-
-                <div className="quick-reactions-row">
-                  {['⚡ Good luck!', '🔥 Running tests...', '🧠 Thinking...', '🤝 GG!'].map((taunt) => (
-                    <button
-                      key={taunt}
-                      type="button"
-                      className="btn-taunt-pill"
-                      onClick={() => handleSendMessage(taunt)}
-                    >
-                      {taunt}
-                    </button>
-                  ))}
-                </div>
-
-                {chatMessages.length > 0 && (
-                  <div className="chat-messages-container">
-                    {chatMessages.slice(-6).map((msg) => {
-                      const isMe = msg.username === currentUser?.username;
-                      return (
-                        <div key={msg.id} className={`chat-bubble ${isMe ? 'chat-me' : 'chat-opponent'}`}>
-                          <span className="chat-sender">{isMe ? 'You' : `@${msg.username}`}:</span>
-                          <span className="chat-body">{msg.text}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <form
-                  className="chat-input-row"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }}
-                >
-                  <input
-                    type="text"
-                    className="chat-input-field"
-                    placeholder="Send arena reaction..."
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    maxLength={140}
-                  />
-                  <button type="submit" className="btn-send-chat" disabled={!chatInput.trim()}>
-                    Send
-                  </button>
-                </form>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Code Editor & Execution Arena */}
-        <div className="arena-right-pane">
-          <div className="code-editor-wrapper">
-            {/* Editor Toolbar */}
-            <div className="editor-toolbar">
-              <div className="toolbar-left">
-                <Code size={16} className="text-cyan" />
-                <select
-                  className="language-selector"
-                  value={selectedLanguage}
-                  onChange={(e) => handleLanguageChange(e.target.value)}
-                >
-                  {SUPPORTED_LANGUAGES.map((lang) => (
-                    <option key={lang.id} value={lang.id}>
-                      {lang.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="toolbar-right">
-                <button
-                  className="toolbar-btn"
-                  onClick={handleCopyCode}
-                  title="Copy code to clipboard"
-                >
-                  {copiedCode ? <Check size={14} className="text-emerald" /> : <Copy size={14} />}
-                  <span>{copiedCode ? 'Copied' : 'Copy'}</span>
-                </button>
-                <button
-                  className="toolbar-btn"
-                  onClick={handleResetCode}
-                  title="Reset to starter code"
-                >
-                  <RotateCcw size={14} />
-                  <span>Reset</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Code Textarea Area */}
-            <div className="code-canvas-container">
-              <div className="code-line-numbers">
-                {code.split('\n').map((_, i) => (
-                  <span key={i} className="line-num">{i + 1}</span>
-                ))}
-              </div>
-              <textarea
-                className="code-textarea"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                onKeyDown={(e) => handleEditorKeyDown(e, code, setCode, handleRunTests, handleSubmitCode)}
-                spellCheck={false}
-                rows={18}
-                placeholder="Write your solution here... (Ctrl+Enter to run, Ctrl+Shift+Enter to submit)"
-              />
-            </div>
-
-            {/* Editor Action Footer */}
-            <div className="editor-footer-actions">
-              <div className="action-hint">
-                <Zap size={14} className="text-amber" />
-                <span>Runs securely in backend VM container</span>
-              </div>
-
-              <div className="action-btn-group">
-                <button
-                  className="btn-run-tests"
-                  onClick={handleRunTests}
-                  disabled={runningTests || submitting || isMatchFinished}
-                >
-                  <Play size={16} />
-                  <span>{runningTests ? 'Running...' : 'Run Tests'}</span>
-                </button>
-
-                <button
-                  className="btn-submit-solution"
-                  onClick={handleSubmitCode}
-                  disabled={submitting || runningTests || isMatchFinished}
-                >
-                  <Send size={16} />
-                  <span>{submitting ? 'Judging...' : 'Submit Solution'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Test Case Verdict Drawer */}
-            {verdict && (
-              <div className={`verdict-panel ${verdict.status.toLowerCase()}`}>
-                <div className="verdict-header">
-                  <div className="verdict-status-title">
-                    {verdict.status === 'ACCEPTED' ? (
-                      <CheckCircle2 size={20} className="text-emerald" />
-                    ) : (
-                      <XCircle size={20} className="text-rose" />
-                    )}
-                    <span className="verdict-name">{verdict.status.replace(/_/g, ' ')}</span>
-                  </div>
-
-                  <div className="verdict-stats">
-                    <span className="stat-passed">
-                      {verdict.passedCount} / {verdict.totalCount} Passed
-                    </span>
-                    <span className="stat-runtime">
-                      <Clock size={14} /> {verdict.runtimeMs}ms
-                    </span>
-                  </div>
-                </div>
-
-                <div className="verdict-msg">{verdict.message}</div>
-
-                {/* Test cases tabs */}
-                {verdict.results.length > 0 && (
-                  <div className="test-cases-tabs">
-                    <div className="tabs-header">
-                      {verdict.results.map((r, idx) => (
-                        <button
-                          key={idx}
-                          className={`tc-tab-btn ${selectedTestCaseIndex === idx ? 'active' : ''} ${
-                            r.passed ? 'passed' : 'failed'
-                          }`}
-                          onClick={() => setSelectedTestCaseIndex(idx)}
-                        >
-                          {r.passed ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-                          <span>Case {r.testIndex}</span>
-                        </button>
-                      ))}
+              return (
+                <div key={m.id} className={`match-card match-status-${m.status.toLowerCase()}`}>
+                  <div className="match-card-header">
+                    <div className="room-code-badge">
+                      <Swords size={14} />
+                      <span>{m.code}</span>
                     </div>
+                    <span className={`status-pill pill-${m.status.toLowerCase()}`}>
+                      {m.status}
+                    </span>
+                  </div>
 
-                    {verdict.results[selectedTestCaseIndex] && (
-                      <div className="tc-details-box">
-                        <div className="io-group">
-                          <label>Input:</label>
-                          <pre>{JSON.stringify(verdict.results[selectedTestCaseIndex].input, null, 2)}</pre>
-                        </div>
-                        <div className="io-group">
-                          <label>Expected:</label>
-                          <pre>{JSON.stringify(verdict.results[selectedTestCaseIndex].expected, null, 2)}</pre>
-                        </div>
-                        <div className="io-group">
-                          <label>Output:</label>
-                          <pre className={verdict.results[selectedTestCaseIndex].passed ? 'text-emerald' : 'text-rose'}>
-                            {verdict.results[selectedTestCaseIndex].actual !== undefined
-                              ? JSON.stringify(verdict.results[selectedTestCaseIndex].actual, null, 2)
-                              : verdict.results[selectedTestCaseIndex].error || 'None'}
-                          </pre>
-                        </div>
-                      </div>
+                  <div className="match-problem-info">
+                    <h4>{m.problem.title}</h4>
+                    <div className="problem-chips">
+                      <span className={`badge-difficulty diff-${m.problem.difficulty.toLowerCase()}`}>
+                        {m.problem.difficulty}
+                      </span>
+                      <span className="badge-category">{m.problem.category}</span>
+                    </div>
+                  </div>
+
+                  <div className="match-combatants-row">
+                    <div className="combatant">
+                      <span className="combatant-name">{m.player1.username}</span>
+                      <span className="combatant-rating">{m.player1.arenaRating} ELO</span>
+                    </div>
+                    <span className="combatants-vs">VS</span>
+                    <div className="combatant">
+                      {m.player2 ? (
+                        <>
+                          <span className="combatant-name">{m.player2.username}</span>
+                          <span className="combatant-rating">{m.player2.arenaRating} ELO</span>
+                        </>
+                      ) : (
+                        <span className="combatant-waiting">Waiting...</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="match-card-footer">
+                    {canJoin ? (
+                      <button className="btn-join-match" onClick={() => handleJoinMatch(m)}>
+                        <UserPlus size={14} />
+                        <span>Join Duel</span>
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-spectate-match"
+                        onClick={() => {
+                          navigate(`/arena/${m.code}`);
+                          enterMatch(m.code);
+                        }}
+                      >
+                        <span>{isInProgress ? 'Enter Battle' : 'View Summary'}</span>
+                        <ChevronRight size={14} />
+                      </button>
                     )}
                   </div>
-                )}
-              </div>
-            )}
+                </div>
+              );
+            })}
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Victory Celebration Modal */}
-      {victoryModalOpen && (
+      {/* Create Duel Modal */}
+      {showCreateModal && (
         <div className="modal-backdrop">
-          <div className="victory-modal-card">
-            <div className="victory-halo-glow" />
-            <Trophy size={64} className="trophy-victory-icon" />
-
-            <h2 className="victory-title">VICTORY CLAIMED!</h2>
-            <p className="victory-subtitle">
-              {winner?.username === currentUser?.username
-                ? 'Outstanding performance! You conquered this arena match.'
-                : `@${winner?.username || 'Winner'} solved all test cases first!`}
+          <div className="modal-card">
+            <h3>Create a 1v1 Arena Duel</h3>
+            <p className="modal-desc">
+              Select an algorithmic challenge and set match duration. Share the room code with your opponent.
             </p>
 
-            <div className="victory-stat-grid">
-              <div className="v-stat-box">
-                <span className="v-label">Rating Change</span>
-                <span className="v-val text-emerald">+25 ELO</span>
-              </div>
-              <div className="v-stat-box">
-                <span className="v-label">Tests Passed</span>
-                <span className="v-val">
-                  {verdict?.passedCount ?? selectedMatch.problem.testCases ? '100%' : 'All'}
-                </span>
-              </div>
-              <div className="v-stat-box">
-                <span className="v-label">Match Status</span>
-                <span className="v-val text-cyan">COMPLETED</span>
-              </div>
+            <div className="form-group">
+              <label>Select Problem</label>
+              <select
+                value={createProblemId}
+                onChange={(e) => setCreateProblemId(e.target.value)}
+              >
+                {problems.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title} ({p.difficulty} - {p.category})
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="victory-actions">
-              <button
-                className="btn-primary-action"
-                onClick={() => {
-                  setVictoryModalOpen(false);
-                  setSelectedMatch(null);
-                  loadArenaData();
-                }}
+            <div className="form-group">
+              <label>Match Duration</label>
+              <select
+                value={createDuration}
+                onChange={(e) => setCreateDuration(parseInt(e.target.value, 10))}
               >
-                Back to Arena Lobby
+                <option value={300}>5 Minutes (Blitz)</option>
+                <option value={600}>10 Minutes (Standard)</option>
+                <option value={900}>15 Minutes (Competitive)</option>
+                <option value={1800}>30 Minutes (Deep Think)</option>
+              </select>
+            </div>
+
+            <div className="modal-actions-row">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowCreateModal(false)}
+                disabled={creating}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={handleCreateMatch}
+                disabled={creating || !createProblemId}
+              >
+                {creating ? 'Creating Room...' : 'Launch Duel'}
               </button>
             </div>
           </div>
