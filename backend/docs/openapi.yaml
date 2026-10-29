@@ -1,0 +1,201 @@
+openapi: 3.0.3
+info:
+  title: CodeArena API Specification
+  description: Real-time 1v1 Competitive Programming Platform API with ELO ratings, aggregated platform stats, and sandboxed judge.
+  version: 2.0.0
+  contact:
+    name: CodeArena Engineering Team
+servers:
+  - url: http://localhost:5001/api
+    description: Local Development Server
+  - url: https://api.codearena.dev/api
+    description: Production Server
+
+paths:
+  /health:
+    get:
+      summary: Health check probe
+      responses:
+        '200':
+          description: Service is healthy and responsive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "ok" }
+                  timestamp: { type: string, format: date-time }
+                  uptime: { type: number, example: 124.5 }
+                  environment: { type: string, example: "production" }
+
+  /auth/register:
+    post:
+      summary: Register a new user account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username: { type: string, minLength: 3, maxLength: 30, example: "tourist_dev" }
+                email: { type: string, format: email, example: "tourist@example.com" }
+                password: { type: string, minLength: 6, example: "secret123" }
+                name: { type: string, example: "Gennady K" }
+                bio: { type: string, example: "Competitive programmer" }
+      responses:
+        '201':
+          description: User registered successfully
+        '409':
+          description: Username or email already registered
+
+  /auth/login:
+    post:
+      summary: Authenticate and retrieve JWT tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, password]
+              properties:
+                identifier: { type: string, example: "tourist_dev" }
+                password: { type: string, example: "secret123" }
+      responses:
+        '200':
+          description: Logged in successfully
+        '401':
+          description: Invalid credentials
+
+  /auth/me:
+    get:
+      summary: Retrieve authenticated user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user profile
+        '401':
+          description: Unauthorized
+
+  /problems:
+    get:
+      summary: List all catalog problems
+      parameters:
+        - name: difficulty
+          in: query
+          schema: { type: string, enum: [All, Easy, Medium, Hard] }
+        - name: category
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: List of problems
+
+  /problems/{slug}:
+    get:
+      summary: Get problem statement details (sanitized test cases)
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Problem details
+        '404':
+          description: Problem not found
+
+  /problems/{slug}/run:
+    post:
+      summary: Dry run code against sample test cases
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, language]
+              properties:
+                code: { type: string }
+                language: { type: string, enum: [javascript, typescript, python, cpp, java] }
+      responses:
+        '200':
+          description: Execution verdict
+
+  /matches:
+    get:
+      summary: List arena matches
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [All, WAITING, IN_PROGRESS, COMPLETED, DRAW] }
+      responses:
+        '200':
+          description: List of matches
+
+  /matches/create:
+    post:
+      summary: Create a 1v1 duel match room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [problemId]
+              properties:
+                problemId: { type: string }
+                player1Username: { type: string }
+                durationSeconds: { type: integer, default: 900 }
+      responses:
+        '201':
+          description: Match created with 6-character room code
+
+  /matches/{code}/join:
+    post:
+      summary: Join an existing match as Player 2
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string, example: "ARENA-F5B9C2" }
+      responses:
+        '200':
+          description: Joined match, match status updated to IN_PROGRESS
+
+  /matches/{code}/submit:
+    post:
+      summary: Submit solution during active duel
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, language]
+              properties:
+                code: { type: string }
+                language: { type: string, enum: [javascript, typescript, python, cpp, java] }
+      responses:
+        '200':
+          description: Submission enqueued for asynchronous judge evaluation
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
