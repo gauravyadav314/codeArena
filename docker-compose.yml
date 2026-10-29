@@ -1,40 +1,96 @@
 version: '3.9'
 
-# CodeArena – Local Development Stack
-# Usage: docker compose up
-# Requirements: Docker + Docker Compose
+# CodeArena Production-Ready Multi-Container Architecture
+# Services: PostgreSQL 16, Redis 7, Sandboxed Judge, Express API, Nginx Frontend
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: codearena-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: codearena
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: codearenasecret
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d codearena']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - codearena-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: codearena-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - codearena-net
+
+  judge:
+    build:
+      context: ./judge
+      dockerfile: Dockerfile
+    container_name: codearena-judge
+    restart: unless-stopped
+    networks:
+      - codearena-net
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: codearena-backend
+    restart: unless-stopped
     ports:
       - '5001:5001'
     environment:
       PORT: 5001
-      NODE_ENV: development
+      NODE_ENV: production
       CLIENT_ORIGIN: http://localhost:5173
-      DATABASE_URL: file:./dev.db
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
-    command: npm run dev
+      DATABASE_URL: postgresql://postgres:codearenasecret@postgres:5432/codearena?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: codearena-production-super-secret-jwt-key-32chars
+      REFRESH_TOKEN_SECRET: codearena-production-super-secret-refresh-key-32chars
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - codearena-net
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: codearena-frontend
+    restart: unless-stopped
     ports:
-      - '5173:5173'
-    environment:
-      VITE_API_BASE_URL: http://localhost:5001
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - '5173:80'
     depends_on:
       - backend
-    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - codearena-net
 
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  codearena-net:
+    driver: bridge
