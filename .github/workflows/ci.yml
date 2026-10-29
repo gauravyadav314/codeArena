@@ -1,26 +1,39 @@
-name: CodeArena CI
+name: CodeArena Production CI
 
 on:
   push:
     branches:
       - main
       - 'feature/**'
+      - 'auto/**'
   pull_request:
     branches:
       - main
 
 jobs:
-  backend-check:
-    name: Backend Build & Schema Check
+  backend-test:
+    name: Backend Test & Typecheck
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     defaults:
       run:
         working-directory: ./backend
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -33,26 +46,37 @@ jobs:
       - name: Validate Prisma schema
         run: npx prisma validate
 
-      - name: Generate Prisma client
-        run: npx prisma generate
+      - name: Generate Prisma client & sync db
+        run: |
+          npx prisma db push
+          npx prisma generate
+          npx tsx prisma/seed.ts
 
-      - name: Build backend TypeScript
+      - name: Typecheck backend TypeScript
+        run: npx tsc --noEmit
+
+      - name: Run Vitest test suite (Unit & Integration)
+        run: npm test
+        env:
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret-key-at-least-32-chars-long
+          REFRESH_TOKEN_SECRET: test-refresh-secret-key-at-least-32-chars
+
+      - name: Build backend distribution
         run: npm run build
 
-      - name: Run backend unit tests
-        run: npm test
-
-  frontend-check:
-    name: Frontend Build & Type Check
+  frontend-test:
+    name: Frontend Build & Typecheck
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./frontend
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -65,3 +89,19 @@ jobs:
       - name: Build frontend Vite application
         run: npm run build
 
+  docker-verification:
+    name: Dockerfile Build Verification
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Backend Dockerfile builds
+        run: docker build -t codearena-backend:test ./backend
+
+      - name: Verify Frontend Dockerfile builds
+        run: docker build -t codearena-frontend:test ./frontend
+
+      - name: Verify Judge Dockerfile builds
+        run: docker build -t codearena-judge:test ./judge
