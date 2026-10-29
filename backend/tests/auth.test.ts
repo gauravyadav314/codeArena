@@ -1,5 +1,4 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect } from 'vitest';
 import {
   hashPassword,
   comparePassword,
@@ -10,26 +9,26 @@ import {
   AuthTokenPayload,
 } from '../src/services/auth.service';
 
-test('Auth Service - Password Hashing & Comparison', async (t) => {
-  await t.test('hashes password and verifies match correctly', async () => {
+describe('Auth Service - Password Hashing & Comparison', () => {
+  it('hashes password and verifies match correctly', async () => {
     const rawPassword = 'SecurePassword123!';
     const hash = await hashPassword(rawPassword);
 
-    assert.notEqual(rawPassword, hash);
+    expect(hash).not.toBe(rawPassword);
     const matches = await comparePassword(rawPassword, hash);
-    assert.equal(matches, true);
+    expect(matches).toBe(true);
   });
 
-  await t.test('rejects incorrect password comparison', async () => {
+  it('rejects incorrect password comparison', async () => {
     const rawPassword = 'CorrectPassword';
     const hash = await hashPassword(rawPassword);
 
     const matches = await comparePassword('WrongPassword', hash);
-    assert.equal(matches, false);
+    expect(matches).toBe(false);
   });
 });
 
-test('Auth Service - JWT Token Lifecycle', async (t) => {
+describe('Auth Service - JWT Token Lifecycle', () => {
   const payload: AuthTokenPayload = {
     id: 'user-uuid-1234',
     username: 'tourist',
@@ -37,30 +36,29 @@ test('Auth Service - JWT Token Lifecycle', async (t) => {
     role: 'USER',
   };
 
-  await t.test('signs and verifies valid access token', () => {
+  it('signs and verifies valid access token', () => {
     const token = generateAccessToken(payload);
-    assert.equal(typeof token, 'string');
+    expect(typeof token).toBe('string');
 
     const decoded = verifyAccessToken(token);
-    assert.equal(decoded.id, payload.id);
-    assert.equal(decoded.username, payload.username);
-    assert.equal(decoded.email, payload.email);
-    assert.equal(decoded.role, payload.role);
+    expect(decoded.id).toBe(payload.id);
+    expect(decoded.username).toBe(payload.username);
+    expect(decoded.email).toBe(payload.email);
+    expect(decoded.role).toBe(payload.role);
   });
 
-  await t.test('signs and verifies valid refresh token', () => {
+  it('signs and verifies valid refresh token', () => {
     const refreshToken = generateRefreshToken(payload);
-    assert.equal(typeof refreshToken, 'string');
+    expect(typeof refreshToken).toBe('string');
 
     const decoded = verifyRefreshToken(refreshToken);
-    assert.equal(decoded.id, payload.id);
-    assert.equal(decoded.username, payload.username);
+    expect(decoded.id).toBe(payload.id);
+    expect(decoded.username).toBe(payload.username);
   });
 
-  await t.test('rejects tampered or malformed tokens', () => {
-    assert.throws(() => {
+  it('rejects tampered or malformed tokens', () => {
+    expect(() => {
       verifyAccessToken('malformed.bogus.token');
-    });
+    }).toThrow();
   });
 });
-

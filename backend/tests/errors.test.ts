@@ -1,5 +1,4 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect } from 'vitest';
 import {
   AppError,
   BadRequestError,
@@ -11,61 +10,60 @@ import {
 } from '../src/errors/AppError';
 import { getRatingTolerance } from '../src/services/matchmaking.service';
 
-test('Typed Error System', async (t) => {
-  await t.test('AppError sets correct statusCode and code', () => {
+describe('Typed Error System', () => {
+  it('AppError sets correct statusCode and code', () => {
     const err = new AppError('Something broke', 503, 'SERVICE_UNAVAILABLE');
-    assert.equal(err.statusCode, 503);
-    assert.equal(err.code, 'SERVICE_UNAVAILABLE');
-    assert.equal(err.isOperational, true);
+    expect(err.statusCode).toBe(503);
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+    expect(err.isOperational).toBe(true);
   });
 
-  await t.test('BadRequestError defaults to 400', () => {
+  it('BadRequestError defaults to 400', () => {
     const err = new BadRequestError('Invalid payload');
-    assert.equal(err.statusCode, 400);
-    assert.equal(err.code, 'BAD_REQUEST');
+    expect(err.statusCode).toBe(400);
+    expect(err.code).toBe('BAD_REQUEST');
   });
 
-  await t.test('UnauthorizedError defaults to 401', () => {
+  it('UnauthorizedError defaults to 401', () => {
     const err = new UnauthorizedError();
-    assert.equal(err.statusCode, 401);
-    assert.equal(err.code, 'UNAUTHORIZED');
+    expect(err.statusCode).toBe(401);
+    expect(err.code).toBe('UNAUTHORIZED');
   });
 
-  await t.test('ForbiddenError defaults to 403', () => {
+  it('ForbiddenError defaults to 403', () => {
     const err = new ForbiddenError();
-    assert.equal(err.statusCode, 403);
-    assert.equal(err.code, 'FORBIDDEN');
+    expect(err.statusCode).toBe(403);
+    expect(err.code).toBe('FORBIDDEN');
   });
 
-  await t.test('NotFoundError defaults to 404', () => {
+  it('NotFoundError defaults to 404', () => {
     const err = new NotFoundError('Item missing');
-    assert.equal(err.statusCode, 404);
-    assert.equal(err.code, 'NOT_FOUND');
+    expect(err.statusCode).toBe(404);
+    expect(err.code).toBe('NOT_FOUND');
   });
 
-  await t.test('ValidationError defaults to 422 with structured details', () => {
+  it('ValidationError defaults to 422 with structured details', () => {
     const details = [{ path: 'email', message: 'Invalid email' }];
     const err = new ValidationError('Validation failed', details);
-    assert.equal(err.statusCode, 422);
-    assert.equal(err.code, 'VALIDATION_ERROR');
-    assert.deepEqual(err.details, details);
+    expect(err.statusCode).toBe(422);
+    expect(err.code).toBe('VALIDATION_ERROR');
+    expect(err.details).toEqual(details);
   });
 
-  await t.test('RateLimitError defaults to 429', () => {
+  it('RateLimitError defaults to 429', () => {
     const err = new RateLimitError();
-    assert.equal(err.statusCode, 429);
-    assert.equal(err.code, 'RATE_LIMIT_EXCEEDED');
+    expect(err.statusCode).toBe(429);
+    expect(err.code).toBe('RATE_LIMIT_EXCEEDED');
   });
 });
 
-test('Matchmaking Queue - Tolerance Window Widening', async (t) => {
-  await t.test('widens tolerance strictly by elapsed waiting time', () => {
-    assert.equal(getRatingTolerance(0), 100);
-    assert.equal(getRatingTolerance(10), 100);
-    assert.equal(getRatingTolerance(15), 250);
-    assert.equal(getRatingTolerance(25), 250);
-    assert.equal(getRatingTolerance(30), 500);
-    assert.equal(getRatingTolerance(60), 500);
+describe('Matchmaking Queue - Tolerance Window Widening', () => {
+  it('widens tolerance strictly by elapsed waiting time', () => {
+    expect(getRatingTolerance(0)).toBe(100);
+    expect(getRatingTolerance(10)).toBe(100);
+    expect(getRatingTolerance(15)).toBe(250);
+    expect(getRatingTolerance(25)).toBe(250);
+    expect(getRatingTolerance(30)).toBe(500);
+    expect(getRatingTolerance(60)).toBe(500);
   });
 });
-
