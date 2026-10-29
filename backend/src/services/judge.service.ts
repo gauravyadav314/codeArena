@@ -40,6 +40,31 @@ function deepEqual(a: any, b: any): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+// Security guard against sandbox escape and host inspection
+const FORBIDDEN_SECURITY_TOKENS = [
+  /\bprocess\b/,
+  /\bchild_process\b/,
+  /\bfs\b/,
+  /\brequire\s*\(/,
+  /\bimport\s*\(/,
+  /\bimport\s+.*from/,
+  /\b__proto__\b/,
+  /\bconstructor\s*\.\s*constructor\b/,
+  /\bglobal\b/,
+  /\bglobalThis\b/,
+  /\beval\s*\(/,
+  /\bFunction\s*\(/,
+];
+
+export function validateExecutionSafety(code: string): { isSafe: boolean; violation?: string } {
+  for (const pattern of FORBIDDEN_SECURITY_TOKENS) {
+    if (pattern.test(code)) {
+      return { isSafe: false, violation: `Security violation: Forbidden pattern '${pattern.source}' detected` };
+    }
+  }
+  return { isSafe: true };
+}
+
 // ==========================================
 // JAVASCRIPT / TYPESCRIPT EVALUATOR
 // ==========================================
@@ -48,6 +73,19 @@ function evaluateJsSubmission(
   testCases: TestCase[],
   functionName?: string
 ): JudgeVerdict {
+  // Pre-execution sandbox escape check
+  const safetyCheck = validateExecutionSafety(code);
+  if (!safetyCheck.isSafe) {
+    return {
+      status: 'RUNTIME_ERROR',
+      passedCount: 0,
+      totalCount: testCases.length,
+      runtimeMs: 0,
+      results: [],
+      message: safetyCheck.violation || 'Execution blocked by security policy',
+    };
+  }
+
   const totalCount = testCases.length;
   if (totalCount === 0) {
     return {
